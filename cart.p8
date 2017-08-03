@@ -12,7 +12,8 @@ platform channels:
 
 hitbox channels:
  1: player swing
- 2: enemy bullet
+ 2: enemy bullets
+ 4: level exit
 
 render layers:
  4: blood
@@ -26,18 +27,32 @@ axis:
 (left) |
       -y (down)
 
+how pixels should be drawn:
+  [-0.5,0.5)
+       |
+       v
+     +---+---+
+     |   |   | <- (0,1]
+     +---+---+
+     |   |   | <- (-1,0]
+     +---+---+
+           ^
+           |
+       [0.5,1.5)
+  
 ]]
 
 local debug_skip_amt=1
 
 -- global vars
 local player
-local name_tag
 local scene
+local level_num
 local scene_frame
 local slow_mo_frames
 local freeze_frames
 local pause_frames
+local slide_frames
 local skip_frames=0
 local entities
 local new_entities
@@ -63,6 +78,18 @@ local color_ramps={
 	red={1,2,8,14},
 	grey={1,13,6,7},
 	brown={1,2,4,15}
+}
+local levels={
+	-- name,update
+	{
+		"shotgun joe"
+	},
+	{
+		"quickdraw jane"
+	},
+	{
+		"longjohn john"
+	}
 }
 local entity_classes={
 	person={
@@ -139,15 +166,17 @@ local entity_classes={
 		slash_cooldown_frames=0,
 		input_dir=0,
 		slash_dir=1,
+		pose_frames=45,
 		hitbox_channel=1,
-		hurtbox_channel=2,
+		hurtbox_channel=6, -- enemy bullets, level exit
 		update=function(self)
+			decrement_counter_prop(self,"pose_frames")
 			decrement_counter_prop(self,"slash_frames")
 			decrement_counter_prop(self,"slash_cooldown_frames")
 			decrement_counter_prop(self,"anti_grav_frames")
 			self.input_dir=ternary(buttons[1],1,0)-ternary(buttons[0],1,0)
 			self.is_jumping_upwards=self.is_jumping_upwards and buttons[2]
-			if not self.has_been_hurt then
+			if not self.has_been_hurt and self.pose_frames<=0 then
 				-- change facing
 				if self.slash_frames==0 and self.input_dir!=0 then
 					self.facing=self.input_dir
@@ -162,8 +191,10 @@ local entity_classes={
 						self.anti_grav_frames=15
 					end
 				end
+			end
+			if not self.has_been_hurt then
 				-- move
-				if self.slash_frames>0 and not self.is_jumping then
+				if (self.slash_frames>0 and not self.is_jumping) or self.pose_frames>0 then
 					self.vx=0
 				else
 					self.vx=self.input_dir
@@ -177,7 +208,7 @@ local entity_classes={
 			end
 			if not self.has_been_hurt then
 				-- jump
-				if self.standing_platform and buttons[2] then
+				if self.standing_platform and buttons[2] and self.pose_frames<=0 then
 					self.vy=2.1
 					self.is_jumping=true
 					self.is_jumping_upwards=true
@@ -191,7 +222,7 @@ local entity_classes={
 			self.standing_platform=nil
 			self:apply_velocity()
 			-- crouch
-			self.is_crouching=self.standing_platform and self.vx==0 and buttons[3]
+			self.is_crouching=self.standing_platform and self.vx==0 and buttons[3] and self.pose_frames<=0
 			self.height=ternary(self.is_crouching,4,5)
 			self:bleed()
 		end,
@@ -200,6 +231,8 @@ local entity_classes={
 			local sprite=0
 			if self.has_been_hurt then
 				sprite=ternary(self.standing_platform,8,7)
+			elseif self.pose_frames>0 and self.pose_frames<45 then
+				sprite=ternary(self.pose_frames>40,9,10)
 			elseif self.slash_frames>0 then
 				sprite=ternary(self.is_jumping and self.vx!=0 and (self.facing>0)==(self.vx>0),7,6)
 			elseif self.is_jumping then
@@ -211,13 +244,24 @@ local entity_classes={
 			end
 			-- draw the sprite
 			self:apply_lighting(self.facing<0)
-			sspr(8*sprite,0,8,6,self.x-ternary(self.facing<0,2.5,1.5),-self.y-5.5,8,6,self.facing<0)
+			sspr(8*sprite,0,8,6,self.x-ternary(self.facing<0,2.5,1.5),-self.y-6,8,6,self.facing<0)
 			pal()
 			-- draw the sword slash
 			if self.slash_frames>0 then
 				local slash_sprite=({6,6,5,4,4,3,2,1,0})[self.slash_frames]
-				sspr(10*slash_sprite,ternary(self.slash_dir<0,15,6),10,9,self.x-ternary(self.facing<0,4.5,1.5),-self.y-6.5,10,9,self.facing<0)
+				sspr(10*slash_sprite,ternary(self.slash_dir<0,15,6),10,9,self.x-ternary(self.facing<0,4.5,1.5),-self.y-7,10,9,self.facing<0)
 			end
+			-- draw pose schwing
+			if self.pose_frames==mid(17,self.pose_frames,30) then
+				local pose_sprite=flr(60-(self.pose_frames-18)/2)
+				spr(pose_sprite,self.x+ternary(self.facing<0,-5.5,1.5),-self.y-8,1,1,self.facing<0)
+			end
+		end,
+		pose=function(self)
+			self.pose_frames=45
+			self.is_jumping_upwards=false
+			self.slash_frames=0
+			self.facing=1
 		end,
 		check_for_hits=function(self,other)
 			return
@@ -233,16 +277,18 @@ local entity_classes={
 		on_hurt=function(self,other)
 			self:super_on_hurt(other)
 			self.slash_frames=0
+			self.pose_frames=0
 		end
 	},
 	shooter={
+		-- name_tag
 		extends="person",
 		height=6,
 		shoot_frames=0,
 		hurtbox_channel=1,
 		update=function(self)
 			decrement_counter_prop(self,"shoot_frames")
-			if not self.has_been_hurt and self.frames_alive%30==20 then
+			if not self.has_been_hurt and self.frames_alive%30==3 then
 				self:shoot()
 			end
 			self.vy-=0.2
@@ -256,9 +302,9 @@ local entity_classes={
 		end,
 		draw=function(self)
 			self:apply_lighting()
-			local sprite=9
+			local sprite=25
 			if self.has_been_hurt then
-				sprite=ternary(self.standing_platform,11,10)
+				sprite=ternary(self.standing_platform,27,26)
 			end
 			spr(sprite,self.x-2.5,-self.y-7.5)
 			pal()
@@ -269,15 +315,40 @@ local entity_classes={
 		on_hurt=function(self,other)
 			self:super_on_hurt(other)
 			self.vy=2
-			self.vx=-self.facing/2.5
+			self.vx=-self.facing/4.5
 			self.shoot_frames=0
-			name_tag:get_slashed()
+			self.name_tag:get_slashed()
+			create_entity("level_exit")
+		end
+	},
+	level_exit={
+		x=124,
+		width=2,
+		height=15,
+		hitbox_channel=4,
+		draw=function(self)
+			if self.frames_alive>42 and (self.frames_alive-42)%30>10 then
+				spr(53,self.x-6.5,-self.y-14)
+			end
+		end,
+		draw_shadow=noop,
+		on_hit=function(self)
+			self:die()
+			return false
+		end,
+		on_death=function(self)
+			freeze_frames=max(freeze_frames,3)
+			pause_frames=max(pause_frames,57)
+			slide_frames=max(slide_frames,57)
+			load_level(level_num+1,112)
+			player:pose()
 		end
 	},
 	invisible_wall={
-		width=10,
-		height=10,
+		width=2,
+		height=2,
 		platform_channel=2,
+		is_slide_immune=true,
 		draw=noop,
 		draw_shadow=noop
 	},
@@ -296,27 +367,11 @@ local entity_classes={
 	twinkle={
 		frames_to_death=9,
 		draw=function(self)
-			spr(51+flr(self.frames_alive/3)%2,self.x-2.5,-self.y-4.5)
-		end
-	},
-	debug_globe={
-		width=8,
-		height=8,
-		collision_channel=3,
-		color_ramp=color_ramps.red,
-		update=function(self)
-			self.vx=ternary(buttons[1],1,0)-ternary(buttons[0],1,0)
-			self.vy=ternary(buttons[2],1,0)-ternary(buttons[3],1,0)
-			self:apply_velocity()
-		end,
-		draw=function(self)
-			self:apply_lighting()
-			spr(68,self.x+0.5,-self.y-7.5)
+			spr(51+flr(self.frames_alive/3)%2,self.x-2.5,-self.y-5)
 		end
 	},
 	blood={
 		render_layer=4,
-		frames_to_death=60,
 		update=function(self)
 			self.vx*=0.97
 			self.vy-=0.1
@@ -394,7 +449,16 @@ local entity_classes={
 			end
 			line(self.left_x+0.5,-self.y,self.right_x+0.5,-self.y,7)
 		end
-	}
+	},
+	debug_cube={
+		width=8,
+		height=8,
+		update=function(self)
+			self.vx=(ternary(buttons[1],1,0)-ternary(buttons[0],1,0))/5
+			self.vy=(ternary(buttons[2],1,0)-ternary(buttons[3],1,0))/5
+			self:apply_velocity()
+		end
+	},
 }
 
 
@@ -458,9 +522,9 @@ function _draw()
 	scenes[scene][3]()
 	-- draw debug info
 	camera()
-	print("mem:      "..flr(100*(stat(0)/1024)).."%",2,107,ternary(stat(1)>=922,2,1))
-	print("cpu:      "..flr(100*stat(1)).."%",2,114,ternary(stat(1)>=.9,2,1))
-	print("entities: "..#entities,2,121,ternary(#entities>50,2,1))
+	-- print("mem:      "..flr(100*(stat(0)/1024)).."%",2,107,ternary(stat(1)>=922,2,1))
+	-- print("cpu:      "..flr(100*stat(1)).."%",2,114,ternary(stat(1)>=.9,2,1))
+	-- print("entities: "..#entities,2,121,ternary(#entities>50,2,1))
 end
 
 
@@ -468,21 +532,30 @@ end
 function init_game()
 	-- reset everything
 	entities,new_entities={},{}
+	slide_frames=0
 	-- create initial entities
 	player=create_entity("player",{x=10})
-	create_entity("shooter",{x=113})
-	name_tag=create_entity("name_tag",{x=127,text="shotgun joe"})
-	-- create_entity("debug_globe",{x=30,y=1})
-	create_entity("invisible_wall",{x=-10,y=-10,width=146,platform_channel=1})
-	create_entity("invisible_wall",{x=-9,y=-10,height=36})
-	create_entity("invisible_wall",{x=125,y=-10,height=36})
+	create_entity("invisible_wall",{x=-10,y=-2,width=146,platform_channel=1})
+	create_entity("invisible_wall",{x=-1,y=-2,height=40})
+	create_entity("invisible_wall",{x=125,y=-2,height=40})
+	-- load the first level
+	load_level(1,0)
 	-- immediately add new entities to the game
 	add_new_entities()
 end
 
 function update_game()
-	-- update entities
 	local entity
+	-- slide entities
+	slide_frames=decrement_counter(slide_frames)
+	if slide_frames>0 then
+		for entity in all(entities) do
+			if not entity.is_slide_immune then
+				entity.x-=2
+			end
+		end
+	end
+	-- update entities
 	for entity in all(entities) do
 		if pause_frames<=0 or entity.is_pause_immune then
 			-- call the entity's update function
@@ -490,6 +563,9 @@ function update_game()
 			-- do some default update stuff
 			increment_counter_prop(entity,"frames_alive")
 			if decrement_counter_prop(entity,"frames_to_death") then
+				entity:die()
+			end
+			if entity.x<-10 then
 				entity:die()
 			end
 		end
@@ -507,8 +583,9 @@ function update_game()
 			if pause_frames<=0 or (entity.is_pause_immune and entity2.is_pause_immune) then
 				if entity!=entity2 and band(entity.hitbox_channel,entity2.hurtbox_channel)>0 then
 					if entity:check_for_hits(entity2) then
-						entity:on_hit(entity2)
-						entity2:on_hurt(entity)
+						if entity:on_hit(entity2)!=false then
+							entity2:on_hurt(entity)
+						end
 					end
 				end
 			end
@@ -551,6 +628,19 @@ function draw_game()
 	end)
 end
 
+function load_level(num,offset)
+	level_num=num
+	local level=levels[level_num]
+	local name_tag=create_entity("name_tag",{
+		x=127+offset,
+		text=level[1]
+	})
+	create_entity("shooter",{
+		x=113+offset,
+		name_tag=name_tag
+	})
+end
+
 
 -- entity functions
 function create_entity(class_name,args,skip_init)
@@ -567,6 +657,7 @@ function create_entity(class_name,args,skip_init)
 			render_layer=5,
 			color_ramp=color_ramps.grey,
 			is_pause_immune=false,
+			is_slide_immune=false,
 			-- spatial props
 			x=0,
 			y=0,
@@ -602,15 +693,17 @@ function create_entity(class_name,args,skip_init)
 				for y=0,3 do
 					local shadow_left=max(0,left+slope*y+ternary(slope<0 and self.height>1,slope,0))
 					local shadow_right=min(right+slope*y+ternary(slope>0 and self.height>1,slope,0),125)
-					if bottom<y+1 and top>=y+1 and shadow_left<shadow_right then
+					if bottom<=y and top>y and shadow_left<shadow_right then
 						line(shadow_left,y,shadow_right,y,2)
 					end
 				end
 			end,
+			draw_outline=function(self)
+				rect(self.x+0.5,-self.y-1,self.x+self.width-0.5,-self.y-self.height,12)
+				-- rect(self.x+0.5-2,-self.y-1+2,self.x+self.width-0.5+2,-self.y-self.height-2,12)
+			end,
 			draw_shape=function(self)
-				-- todo i think it should still be -self.y+0.5... maybe?
-				-- so x should be +0.5, but y I think I only want something displayed at the ground if y<=0...
-				rectfill(self.x+0.5,-self.y-0.5,self.x+self.width-0.5,-self.y-self.height+0.5,self.color_ramp[1])
+				rectfill(self.x+0.5,-self.y-1,self.x+self.width-0.5,-self.y-self.height,self.color_ramp[1])
 			end,
 			apply_lighting=function(self,flipped)
 				local c
@@ -641,8 +734,10 @@ function create_entity(class_name,args,skip_init)
 				end
 			end,
 			die=function(self)
-				self:on_death()
-				self.is_alive=false
+				if self.is_alive then
+					self.is_alive=false
+					self:on_death()
+				end
 			end,
 			on_death=noop,
 			apply_velocity=function(self)
@@ -883,21 +978,21 @@ scenes={
 
 __gfx__
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00047000000000000000470000008b000008b00000008b0000047000004700000000000000000000000000000000000008000800080008000800080008000800
-0081b0000004700000041b0000081b000081b00000081b000004b0000041b0000000000000045700000045700000000000808000008080000080800000808000
-1111b0000081b00011111b0011111b001111b00011111b000081b0000081b00000000000008111b00008111b0000000000080000000800000008000000080000
-0081b0001111b0000081f0000081f00000cee00000cdf000008eb0000081f0000447700011081b00000081b00000000000808000008080000080800000808000
-00c0f0000c11f0000800f00000cf00000c000f000c0f000000c0f00000080f0008111b0001081b00000811b00000070008000800080008000800080008000800
-0000000000000000000000000000000000000100000077700000007770000000000000000008db0000081b000044417000000000000000000000000000000000
-000000000000000000000000000000000000177001777777700077777770007700000000000c0f0000c0f000081111b000000000000000000000000000000000
+00047000000000000000470000008b000008b00000008b0000047000004700000000000000047000000470000800080008000800080008000800080008000800
+0081b0000004700000041b0000081b000081b00000081b000004b0000041b000000000000081b0000081b1110080800000808000008080000080800000808000
+1111b0000081b00011111b0011111b001111b00011111b000081b0000081b000000000000081110000811f000008000000080000000800000008000000080000
+0081b0001111b0000081f0000081f00000cee00000cdf000008eb0000081f000044770000081b0000081b0000080800000808000008080000080800000808000
+00c0f0000c11f0000800f00000cf00000c000f000c0f000000c0f00000080f0008111b0000c0f00000c0f0000800080008000800080008000800080008000800
+00000000000000000000000000000000000001000000777000000077700000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000017700177777770007777777000770000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000177700017777770017777777000770000008800000000000000000000000000000000000000000000000000000000
-07000000000000000000000001110000007777770001777777070077777717700000008808000800080008000800080008000800080008000800080008000800
-77110000000700010000000000071100007777770700077777070000777707000000008800808000008080000080800000808000008080000080800000808000
-11000000000777010000000007777700007777770770007777000000000707000000008800080000000800000008000000080000000800000008000000080000
-00000000000077771000000777777000007777700077700770000000000000700000008800808000008080000080800000808000008080000080800000808000
-00000000000077771000007777777000077777700007770070000770000000000007008808000800080008000800080008000800080008000800080008000800
-00000000000000777000000077700000007770000000077000000077700000000070008800000000000000000000000000000000000000000000000000000000
-00000000000000000000000077700000007770000000770700000077700000007770008800000000000000000000000000000000000000000000000000000000
+07000000000000000000000001110000007777770001777777070077777717700000008800000000000000000000000008000800080008000800080008000800
+77110000000700010000000000071100007777770700077777070000777707000000008800045700000045700000000000808000008080000080800000808000
+110000000007770100000000077777000077777707700077770000000007070000000088008111b00008111b0000000000080000000800000008000000080000
+00000000000077771000000777777000007777700077700770000000000000700000008811081b00000081b00000000000808000008080000080800000808000
+00000000000077771000007777777000077777700007770070000770000000000007008801081b00000811b00000070008000800080008000800080008000800
+0000000000000077700000007770000000777000000007700000007770000000007000880008db0000081b000044417000000000000000000000000000000000
+000000000000000000000000777000000077700000007707000000777000000077700088000c0f0000c0f000081111b000000000000000000000000000000000
 01000000000000771000007777777000000777700007700770007700000000000000008800000000000000000000000000000000000000000000000000000000
 07100000000077710000000777777000000777700077707770007000000000000000008808000800080008000800080008000800080008000800080008000800
 07710000000077710000000007771100000777770077007777070000000700100000008800808000008080000080800000808000008080000080800000808000
@@ -907,13 +1002,13 @@ __gfx__
 00000000000000000000000000000000000017700017777770007777777000777000008800000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000070000000777000000077700000007770008800000000000000000000000000000000000000000000000000000000
 000000000000000000000a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000a00000000000000000000000000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800
-00000aa00000000a00000000000f0000000000000080800000808000008080000080800000808000008080000080800000808000008080000080800000808000
-0000aaaa00000aaa00000000000f0000000700000008000000080000000800000008000000080000000800000008000000080000000800000008000000080000
-00000aa00000000a0000000000fff000777077700080800000808000008080000080800000808000008080000080800000808000008080000080800000808000
-00000000000000a000000000000f0000000700000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800
-000000000000000000000a00000f0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000a00000000000000000000000000088800000000000000000000000000000000700000000000000000000000000080008000800080008000800
+00000aa00000000a00000000000f0000000000000880880000000000000000000000700000000700000000700000000000000000008080000080800000808000
+0000aaaa00000aaa00000000000f0000000700008880888000000000000000000000700000007700000707000000f00000000000000800000008000000080000
+00000aa00000000a0000000000fff000777077708880888807700000007770000007770000777770000070000007770000007000008080000080800000808000
+00000000000000a000000000000f0000000700008888888000000000000000000000700000077000000707000000f00000000000080008000800080008000800
+000000000000000000000a00000f0000000000000880880000000000000000000000700000070000007000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000088800000000000000000000000000000070000000000000000000000000000000000000000000000000000
 01000100000000000100010000000000004567000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 10000010000000001000001000000000045116700800080008000800080008000800080008000800080008000800080008000800080008000800080008000800
 10000010000000001000001000000000441111770080800000808000008080000080800000808000008080000080800000808000008080000080800000808000
