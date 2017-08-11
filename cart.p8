@@ -6,9 +6,10 @@ __lua__
 
 quickdraw gambit?
 
-platform channels:
+collision channels:
   1: ground
-  2: invisible walls
+  2: left wall, right wall
+  4: crates/barrels
 
 hitbox channels:
  1: player swing
@@ -16,7 +17,7 @@ hitbox channels:
  4: level exit
 
 render layers:
- 4: blood
+ 4: blood, muzzle flash
  5: ??
  6: twinkle
 
@@ -39,13 +40,16 @@ how pixels should be drawn:
            ^
            |
        [0.5,1.5)
-  
+
 ]]
 
 local debug_skip_amt=1
+local debug_num_steps=0
 
 -- global vars
 local player
+local left_wall
+local right_wall
 local scene
 local level_num
 local scene_frame
@@ -59,12 +63,13 @@ local new_entities
 local buttons={}
 local button_presses={}
 local light_sources={
-	{x=63,y=1,intensity=1,max_color=2,fixed_distance=true,radius=10}
+	{x=63,y=1,intensity=3,min_range=10,is_alive=true}
 }
 function noop() end
 
 
 -- constants
+local ground={vx=0,vy=0}
 local directions={"left","right","bottom","top"}
 local dir_lookup={
 	-- axis,size,increment
@@ -75,9 +80,10 @@ local dir_lookup={
 }
 local scenes={}
 local color_ramps={
-	red={1,2,8,14},
-	grey={1,13,6,7},
-	brown={1,2,4,15}
+	debug={1,5,13,6,7},
+	red={1,2,8,8,14},
+	grey={1,5,13,6,7},
+	brown={1,2,4,4,15}
 }
 local levels={
 	-- name,update
@@ -99,7 +105,7 @@ local entity_classes={
 		facing=1,
 		anti_grav_frames=0,
 		-- collision props
-		collision_channel=3, -- ground, invisible walls
+		collision_channel=7, -- ground, invisible walls, crates/barrels
 		standing_platform=nil,
 		-- state props
 		is_jumping=false,
@@ -107,16 +113,8 @@ local entity_classes={
 		has_been_hurt=false,
 		-- frame data
 		bleed_frames=0,
-		on_collide=function(self,dir,platform)
-			if dir=="bottom" then
-				self.standing_platform=platform
-				self.is_jumping=false
-				self.is_jumping_upwards=false
-				self.anti_grav_frames=0
-				if self.has_been_hurt then
-					self.vx=0
-				end
-			end
+		turn_around=function(self)
+			self.facing=-self.facing
 		end,
 		bleed=function(self)
 			decrement_counter_prop(self,"bleed_frames")
@@ -162,11 +160,12 @@ local entity_classes={
 	player={
 		extends="person",
 		is_crouching=false,
+		is_slide_pause_immune=false,
 		slash_frames=0,
 		slash_cooldown_frames=0,
 		input_dir=0,
 		slash_dir=1,
-		pose_frames=45,
+		pose_frames=0,
 		hitbox_channel=1,
 		hurtbox_channel=6, -- enemy bullets, level exit
 		update=function(self)
@@ -234,7 +233,7 @@ local entity_classes={
 			elseif self.pose_frames>0 and self.pose_frames<45 then
 				sprite=ternary(self.pose_frames>40,9,10)
 			elseif self.slash_frames>0 then
-				sprite=ternary(self.is_jumping and self.vx!=0 and (self.facing>0)==(self.vx>0),7,6)
+				sprite=ternary(self.is_jumping and self.vx!=0 and (self.facing<0)==(self.vx<0),7,6)
 			elseif self.is_jumping then
 				sprite=ternary(self.vx==0,4,5)
 			elseif self.is_crouching then
@@ -268,7 +267,7 @@ local entity_classes={
 				self.slash_frames>=4 and
 				self.slash_frames<=7 and
 				rects_overlapping(
-					self.x-ternary(self.facing>0,0,7),self.y-3,10,10,
+					self.x-ternary(self.facing<0,7,0),self.y-3,10,10,
 					other.x,other.y,other.width,other.height)
 		end,
 		on_hit=function(self)
@@ -281,42 +280,71 @@ local entity_classes={
 		end
 	},
 	shooter={
-		-- name_tag
+		-- x,name_tag
 		extends="person",
 		height=6,
-		shoot_frames=0,
+		facing=-1,
 		hurtbox_channel=1,
+		walk_frames=0,
+		collision_channel=5, -- ground, crates/barrels
 		update=function(self)
-			decrement_counter_prop(self,"shoot_frames")
-			if not self.has_been_hurt and self.frames_alive%30==3 then
-				self:shoot()
+			decrement_counter_prop(self,"walk_frames")
+			if not self.has_been_hurt and self.frames_alive%18==3 then
+				-- self:jump(0,2)
+			end
+			if not self.has_been_hurt and self.frames_alive%20==3 then
+				self:shoot({angle=0})
 			end
 			self.vy-=0.2
 			self.standing_platform=nil
 			self:apply_velocity()
+			if self.standing_platform and self.walk_frames<=0 then
+				self.vx=0
+			end
 			self:bleed()
 		end,
-		shoot=function(self)
-			create_entity("bullet",{x=self.x-4,y=self.y+3})
-			self.shoot_frames=6
+		walk=function(self,vx,frames)
+			self.vx=vx/4
+			self.walk_frames=frames
+		end,
+		shoot=function(self,options)
+			options=options or {}
+			local angle=options.angle or 0
+			-- if self.weapon=="gun" then
+			create_entity("bullet",{
+				x=self.x+ternary(self.facing<0,-4,5),
+				y=ceil(self.y+2.5),
+				vx=self.facing,
+				vy=angle/10
+			})
+			if not options.skip_effects then
+				create_entity("muzzle_flash",{
+					x=self.x+ternary(self.facing<0,-4,6),
+					y=self.y+4,
+					facing=self.facing
+				})
+			end
+		end,
+		jump=function(self,vx,jump_lvl)
+			self.vx=vx/4
+			self.vy=({1.1,1.6,2.1,2.4})[jump_lvl]
 		end,
 		draw=function(self)
-			self:apply_lighting()
-			local sprite=25
+			self:apply_lighting(self.facing<0)
+			local sprite=ternary(self.standing_platform,25,27)
 			if self.has_been_hurt then
-				sprite=ternary(self.standing_platform,27,26)
+				sprite=ternary(self.standing_platform,29,28)
+			elseif vx!=0 and self.standing_platform then
+				sprite=ternary(self.walk_frames%10<5,25,26)
 			end
-			spr(sprite,self.x-2.5,-self.y-7.5)
+			spr(sprite,self.x-ternary(self.facing<0,2.5,1.5),-self.y-7.5,1,1,self.facing<0)
 			pal()
-			if self.shoot_frames>0 then
-				spr(51-ceil(self.shoot_frames/2),self.x-10.5,self.y-6.5)
-			end
 		end,
 		on_hurt=function(self,other)
 			self:super_on_hurt(other)
 			self.vy=2
-			self.vx=-self.facing/4.5
-			self.shoot_frames=0
+			self.vx=-self.facing/2
+			self.is_slide_pause_immune=false
 			self.name_tag:get_slashed()
 			create_entity("level_exit")
 		end
@@ -330,6 +358,7 @@ local entity_classes={
 			if self.frames_alive>42 and (self.frames_alive-42)%30>10 then
 				spr(53,self.x-6.5,-self.y-14)
 			end
+			self:draw_outline(8)
 		end,
 		draw_shadow=noop,
 		on_hit=function(self)
@@ -338,31 +367,41 @@ local entity_classes={
 		end,
 		on_death=function(self)
 			freeze_frames=max(freeze_frames,3)
-			pause_frames=max(pause_frames,57)
-			slide_frames=max(slide_frames,57)
-			load_level(level_num+1,112)
-			player:pose()
+			pause_frames=max(pause_frames,30)
+			slide_frames=max(slide_frames,59)
+			left_wall.x+=116
+			right_wall.x+=116
+			load_level(level_num+1,116)
+			-- player:pose()
 		end
 	},
 	invisible_wall={
-		width=2,
-		height=2,
+		width=4,
+		height=4,
 		platform_channel=2,
-		is_slide_immune=true,
 		draw=noop,
 		draw_shadow=noop
 	},
 	bullet={
 		width=2,
-		height=1,
-		vx=-1,
-		hitbox_channel=2,
-		hurtbox_channel=1,
+		height=0.1,
+		hitbox_channel=2, -- enemy bullets
+		hurtbox_channel=1, -- player swing
 		frames_to_death=120,
+		collision_channel=1, -- ground
+		on_collide=function(self)
+			self:die()
+		end,
 		on_hurt=function(self)
 			self:die()
 			create_entity("twinkle",{x=self.x+self.vx,y=self.y+self.vy})
 		end
+	},
+	big_bullet={
+		width=2,
+		height=2,
+		hitbox_channel=2,
+		frames_to_death=120
 	},
 	twinkle={
 		frames_to_death=9,
@@ -372,22 +411,21 @@ local entity_classes={
 	},
 	blood={
 		render_layer=4,
+		is_slide_pause_immune=false,
+		collision_channel=1, -- ground
 		update=function(self)
 			self.vx*=0.97
 			self.vy-=0.1
 			self:apply_velocity()
-			if self.y<=0 then
-				self.y=0
-				self.vy=0
-				self.vx=0
-			end
 		end,
 		draw=function(self)
 			pset(self.x+0.5,-self.y,ternary(self.y<=0,2,8))
 		end,
 		on_collide=function(self)
-			self.collision_channel=0
-			self.frames_to_death=30
+			if self.frames_to_death<=0 then
+				self.vx=0
+				self.frames_to_death=30
+			end
 		end
 	},
 	name_tag={
@@ -450,15 +488,52 @@ local entity_classes={
 			line(self.left_x+0.5,-self.y,self.right_x+0.5,-self.y,7)
 		end
 	},
+	muzzle_flash={
+		-- x,y,facing,is_big
+		render_layer=4,
+		frames_to_death=6,
+		intensity=5,
+		max_range=20,
+		add_to_game=function(self)
+			add(light_sources,self)
+		end,
+		draw=function(self)
+			spr(51-ceil(self.frames_to_death/2)+ternary(self.is_big,13,0),self.x+ternary(self.facing<0,-5.5,-0.5),-self.y-3,1,1,self.facing<0)
+		end
+	},
 	debug_cube={
 		width=8,
 		height=8,
 		update=function(self)
-			self.vx=(ternary(buttons[1],1,0)-ternary(buttons[0],1,0))/5
-			self.vy=(ternary(buttons[2],1,0)-ternary(buttons[3],1,0))/5
+			self.vx=(ternary(buttons[1],1,0)-ternary(buttons[0],1,0))/0.97
+			self.vy=(ternary(buttons[2],1,0)-ternary(buttons[3],1,0))/0.97
 			self:apply_velocity()
+		end,
+		draw=function(self)
+			self:apply_lighting()
+			spr(69,self.x+0.5,-self.y-8)
 		end
 	},
+	crate={
+		width=4,
+		height=4,
+		collision_channel=5, -- ground, crates/barrels
+		platform_channel=4, -- crates/barrels
+		hurtbox_channel=2, -- bullets
+		gravity=0.2,
+		color_ramp=color_ramps.brown,
+		sprite=14,
+		draw=function(self)
+			self:apply_lighting()
+			spr(self.sprite,self.x-1.5,-self.y-8)
+		end,
+		on_hurt=noop
+	},
+	barrel={
+		extends="crate",
+		height=6,
+		sprite=15
+	}
 }
 
 
@@ -522,9 +597,10 @@ function _draw()
 	scenes[scene][3]()
 	-- draw debug info
 	camera()
-	-- print("mem:      "..flr(100*(stat(0)/1024)).."%",2,107,ternary(stat(1)>=922,2,1))
-	-- print("cpu:      "..flr(100*stat(1)).."%",2,114,ternary(stat(1)>=.9,2,1))
-	-- print("entities: "..#entities,2,121,ternary(#entities>50,2,1))
+	print("steps:    "..debug_num_steps,2,100,ternary(debug_num_steps>=20,2,1))
+	print("mem:      "..flr(100*(stat(0)/1024)).."%",2,107,ternary(stat(1)>=820,2,1))
+	print("cpu:      "..flr(100*stat(1)).."%",2,114,ternary(stat(1)>=.8,2,1))
+	print("entities: "..#entities,2,121,ternary(#entities>50,2,1))
 end
 
 
@@ -534,10 +610,13 @@ function init_game()
 	entities,new_entities={},{}
 	slide_frames=0
 	-- create initial entities
-	player=create_entity("player",{x=10})
-	create_entity("invisible_wall",{x=-10,y=-2,width=146,platform_channel=1})
-	create_entity("invisible_wall",{x=-1,y=-2,height=40})
-	create_entity("invisible_wall",{x=125,y=-2,height=40})
+	player=create_entity("player",{x=6})
+	left_wall=create_entity("invisible_wall",{x=-3,y=-4,height=40})
+	right_wall=create_entity("invisible_wall",{x=125,y=-4,height=40})
+	create_entity("crate",{x=50})
+	create_entity("crate",{x=52,y=10})
+	create_entity("barrel",{x=30,y=10})
+	-- create_entity("debug_cube",{x=60,y=5})
 	-- load the first level
 	load_level(1,0)
 	-- immediately add new entities to the game
@@ -545,19 +624,18 @@ function init_game()
 end
 
 function update_game()
+	debug_num_steps=0
 	local entity
 	-- slide entities
 	slide_frames=decrement_counter(slide_frames)
 	if slide_frames>0 then
 		for entity in all(entities) do
-			if not entity.is_slide_immune then
-				entity.x-=2
-			end
+			entity:slide()
 		end
 	end
 	-- update entities
 	for entity in all(entities) do
-		if pause_frames<=0 or entity.is_pause_immune then
+		if (pause_frames<=0 or entity.is_pause_immune) and (slide_frames<=0 or entity.is_slide_pause_immune) then
 			-- call the entity's update function
 			entity:update()
 			-- do some default update stuff
@@ -572,7 +650,7 @@ function update_game()
 	end
 	-- call each entity's post_update function
 	for entity in all(entities) do
-		if pause_frames<=0 or entity.is_pause_immune then
+		if (pause_frames<=0 or entity.is_pause_immune) and (slide_frames<=0 or entity.is_slide_pause_immune) then
 			entity:post_update()
 		end
 	end
@@ -580,7 +658,7 @@ function update_game()
 	local entity2
 	for entity in all(entities) do
 		for entity2 in all(entities) do
-			if pause_frames<=0 or (entity.is_pause_immune and entity2.is_pause_immune) then
+			if (pause_frames<=0 or (entity.is_pause_immune and entity2.is_pause_immune)) and (slide_frames<=0 or (entity.is_slide_pause_immune and entity2.is_slide_pause_immune)) then
 				if entity!=entity2 and band(entity.hitbox_channel,entity2.hurtbox_channel)>0 then
 					if entity:check_for_hits(entity2) then
 						if entity:on_hit(entity2)!=false then
@@ -595,6 +673,7 @@ function update_game()
 	add_new_entities()
 	-- remove dead entities from the game
 	remove_deceased_entities(entities)
+	remove_deceased_entities(light_sources)
 	-- sort entities for rendering
 	sort_list(entities,function(a,b)
 		return a.render_layer>b.render_layer
@@ -626,6 +705,11 @@ function draw_game()
 		entity:draw()
 		pal()
 	end)
+	-- black out the area outside the pane
+	color(0)
+	-- rectfill(-1,4,126,57) -- bottom
+	rectfill(-1,-70,126,-21) -- top
+	rect(-1,-21,126,4) -- edges
 end
 
 function load_level(num,offset)
@@ -636,7 +720,7 @@ function load_level(num,offset)
 		text=level[1]
 	})
 	create_entity("shooter",{
-		x=113+offset,
+		x=117+offset,
 		name_tag=name_tag
 	})
 end
@@ -657,7 +741,9 @@ function create_entity(class_name,args,skip_init)
 			render_layer=5,
 			color_ramp=color_ramps.grey,
 			is_pause_immune=false,
-			is_slide_immune=false,
+			is_slide_pause_immune=true, -- todo
+			slide_rate=2,
+			gravity=0,
 			-- spatial props
 			x=0,
 			y=0,
@@ -677,11 +763,12 @@ function create_entity(class_name,args,skip_init)
 			init=noop,
 			add_to_game=noop,
 			update=function(self)
+				self.vy-=self.gravity
 				self:apply_velocity()
 			end,
 			post_update=noop,
 			draw=function(self)
-				self:draw_shape()
+				self:draw_shape(1)
 			end,
 			draw_shadow=function(self)
 				local slope=(self.x-62)/15
@@ -698,39 +785,45 @@ function create_entity(class_name,args,skip_init)
 					end
 				end
 			end,
-			draw_outline=function(self)
-				rect(self.x+0.5,-self.y-1,self.x+self.width-0.5,-self.y-self.height,12)
-				-- rect(self.x+0.5-2,-self.y-1+2,self.x+self.width-0.5+2,-self.y-self.height-2,12)
+			draw_outline=function(self,color)
+				rect(self.x+0.5,-self.y-1,self.x+self.width-0.5,-self.y-self.height,color)
 			end,
-			draw_shape=function(self)
-				rectfill(self.x+0.5,-self.y-1,self.x+self.width-0.5,-self.y-self.height,self.color_ramp[1])
+			draw_shape=function(self,color)
+				rectfill(self.x+0.5,-self.y-1,self.x+self.width-0.5,-self.y-self.height,color)
 			end,
 			apply_lighting=function(self,flipped)
 				local c
+				-- dark blue = permanent shadow (1st color)
+				-- purple = permanent midtone (3rd color)
+				-- dark green = permanent highlight (5th color)
 				for c=1,3 do
-					pal(c,self.color_ramp[c])
+					pal(c,self.color_ramp[2*c-1])
 				end
+				-- every other color is lit based on the angle and distance to light sources
 				for c=4,15 do
-					local surface_x,surface_y=normalize(
-						ternary(flipped,3-c%4,c%4)-1.5, -- -1.5,-0.5,0.5,1.5
-						2-flr(c/4)) -- -1,0,1
-					local lightness=1
-					local light_source
+					local surface_x=({-2,-0.2,0.2,2})[1+c%4]*ternary(flipped,-1,1)
+					local surface_y=({1,0,-1})[flr(c/4)]
+					surface_x,surface_y=normalize(surface_x,surface_y)
+					local surface_penalty=ternary(c==9 or c==10,1,0)
+					local color_index=1
 					for light_source in all(light_sources) do
 						local dx=mid(-100,light_source.x-self.x-self.width/2,100)
 						local dy=mid(-100,light_source.y-self.y-self.height/2,100)
 						local square_dist=dx*dx+dy*dy -- between 0 and 20000
 						local dist=sqrt(square_dist) -- between 0 and ~142
-						local dx_norm=dx/dist -- between -1 and 1
-						local dy_norm=dy/dist -- between -1 and 1
-						local dot=ternary(dist<light_source.radius,1,surface_x*dx_norm+surface_y*dy_norm)
-						lightness=mid(1,flr(
-							4*dot*
-							light_source.intensity*
-							ternary(light_source.fixed_distance,1,mid(0.1,35/dist,1.5))),
-							light_source.max_color)
+						local dx_norm=dx/dist
+						local dy_norm=dy/dist
+						local max_color_index=light_source.intensity+0.7
+						local min_range=ternary(light_source.min_range,light_source.min_range,0)
+						local dot=surface_x*dx_norm+surface_y*dy_norm
+						if dist<min_range then
+							dot=1
+						elseif light_source.max_range then
+							max_color_index*=1-mid(0,(dist-min_range)/(light_source.max_range-min_range),1)
+						end
+						color_index=max(color_index,mid(1,flr(max_color_index*dot)-surface_penalty,5))
 					end
-					pal(c,self.color_ramp[lightness])
+					pal(c,self.color_ramp[color_index])
 				end
 			end,
 			die=function(self)
@@ -740,18 +833,26 @@ function create_entity(class_name,args,skip_init)
 				end
 			end,
 			on_death=noop,
+			slide=function(self)
+				self.x-=self.slide_rate
+			end,
 			apply_velocity=function(self)
 				local vx,vy=self.vx,self.vy
-				if vx!=0 or vy!=0 then
-					local move_steps,t,entity,dir=ceil(max(abs(vx),abs(vy))/0.25)
+				if self.collision_channel<=1 and self.platform_channel<=0 then
+					self.x+=vx
+					self.y+=vy
+				elseif vx!=0 or vy!=0 then
+					local move_steps,t,entity,dir=ceil(max(abs(vx),abs(vy))/1.05)
 					for t=1,move_steps do
+						debug_num_steps+=1
 						if vx==self.vx then
 							self.x+=vx/move_steps
 						end
 						if vy==self.vy then
 							self.y+=vy/move_steps
 						end
-						if self.collision_channel>0 then
+						-- check for collisions against other entities
+						if self.collision_channel>1 then
 							for dir in all(directions) do
 								for entity in all(entities) do
 									self:check_for_collision(entity,dir)
@@ -767,6 +868,12 @@ function create_entity(class_name,args,skip_init)
 							end
 						end
 					end
+				end
+				-- check for collisions against the ground
+				if self.y<0 and self.vy<0 and band(self.collision_channel,1)>0 then
+					self.y=0
+					self.vy=-self.vy*self.bounce_y
+					self:on_collide("bottom",ground)
 				end
 			end,
 			check_for_collision=function(self,platform,dir)
@@ -952,10 +1059,10 @@ function is_overlapping_dir(a,b,dir)
 		return false
 	end
 	local a_sub={
-		x=a.x+0.3,
-		y=a.y+0.3,
-		width=a.width-0.6,
-		height=a.height-0.6
+		x=a.x+1.1,
+		y=a.y+1.1,
+		width=a.width-2.2,
+		height=a.height-2.2
 	}
 	local axis,size=dir_lookup[dir][1],dir_lookup[dir][2]
 	a_sub[axis]=a[axis]+ternary(dir_lookup[dir][3]>0,a[size]/2,0)
@@ -967,7 +1074,7 @@ end
 
 -- check for aabb overlap
 function rects_overlapping(x1,y1,w1,h1,x2,y2,w2,h2)
-	return x1+w1>=x2 and x2+w2>=x1 and y1+h1>=y2 and y2+h2>=y1
+	return x1+w1>x2 and x2+w2>x1 and y1+h1>y2 and y2+h2>y1
 end
 
 -- set up the scenes now that the functions are defined
@@ -978,21 +1085,21 @@ scenes={
 
 __gfx__
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00047000000000000000470000008b000008b00000008b0000047000004700000000000000047000000470000800080008000800080008000800080008000800
-0081b0000004700000041b0000081b000081b00000081b000004b0000041b000000000000081b0000081b1110080800000808000008080000080800000808000
-1111b0000081b00011111b0011111b001111b00011111b000081b0000081b000000000000081110000811f000008000000080000000800000008000000080000
-0081b0001111b0000081f0000081f00000cee00000cdf000008eb0000081f000044770000081b0000081b0000080800000808000008080000080800000808000
-00c0f0000c11f0000800f00000cf00000c000f000c0f000000c0f00000080f0008111b0000c0f00000c0f0000800080008000800080008000800080008000800
-00000000000000000000000000000000000001000000777000000077700000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000017700177777770007777777000770000000000000000000000000000000000000000000000000000000000000000
+000470000000000000004700000047000004b00000004b0000047000004700000000000000047000000470000800080008000800080008000000000000000000
+0081b0000004700000081b0000081b000081b00000081b000008b0000081b000000000000081b0000081b1110080800000808000008080000000000000856b00
+1111b0000081b00011111b0011111b001111b00011111b000081b0000081b0000000000000811000008110000008000000080000000800000000000000911a00
+008eb0001111b000008ef0000081f00000cee00000cef000008eb0000081f00004567000008eb100008eb00000808000008080000080800000856b000089ab00
+00c0f0000c11f0000800f00000cf00000c000f000c0f000000c0f00000080f0008111b0000c0f00000c0f0000800080008000800080008000089ab000089ab00
+00000000000000000000000000000000000001000000777000000077700000000000000000000000000000000000000000000000000000000089ab0000911a00
+00000000000000000000000000000000000017700177777770007777777000770000000000000000000000000000000000000000000000000089ab000089ab00
 00000000000000000000000000000000000177700017777770017777777000770000008800000000000000000000000000000000000000000000000000000000
-07000000000000000000000001110000007777770001777777070077777717700000008800000000000000000000000008000800080008000800080008000800
-77110000000700010000000000071100007777770700077777070000777707000000008800045700000045700000000000808000008080000080800000808000
-110000000007770100000000077777000077777707700077770000000007070000000088008111b00008111b0000000000080000000800000008000000080000
-00000000000077771000000777777000007777700077700770000000000000700000008811081b00000081b00000000000808000008080000080800000808000
-00000000000077771000007777777000077777700007770070000770000000000007008801081b00000811b00000070008000800080008000800080008000800
-0000000000000077700000007770000000777000000007700000007770000000007000880008db0000081b000044417000000000000000000000000000000000
-000000000000000000000000777000000077700000007707000000777000000077700088000c0f0000c0f000081111b000000000000000000000000000000000
+07000000000000000000000001110000007777770001777777070077777717700000008800000000000000000000000000000000000000000800080008000800
+77110000000700010000000000071100007777770700077777070000777707000000008800467000004670000046700004670000000000000080800000808000
+11000000000777010000000007777700007777770770007777000000000707000000008808111b0008111b0008111b008111b000000000000008000000080000
+0000000000007777100000077777700000777770007770077000000000000070000000880081b0110081b0110081b011081b0000000000000080800000808000
+0000000000007777100000777777700007777770000777007000077000000000000700880081b0100081b0100081b0100811b000004000000800080008000800
+000000000000007770000000777000000077700000000770000000777000000000700088008eb000008eb000008eb0000081b000041777000000000000000000
+00000000000000000000000077700000007770000000770700000077700000007770008800c0f000000c00000c000f00000c0f00081111b00000000000000000
 01000000000000771000007777777000000777700007700770007700000000000000008800000000000000000000000000000000000000000000000000000000
 07100000000077710000000777777000000777700077707770007000000000000000008808000800080008000800080008000800080008000800080008000800
 07710000000077710000000007771100000777770077007777070000000700100000008800808000008080000080800000808000008080000080800000808000
@@ -1001,22 +1108,22 @@ __gfx__
 00000000000000000000000000000000000177700701777770177007777000700000008808000800080008000800080008000800080008000800080008000800
 00000000000000000000000000000000000017700017777770007777777000777000008800000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000070000000777000000077700000007770008800000000000000000000000000000000000000000000000000000000
-000000000000000000000a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000a00000000000000000000000000088800000000000000000000000000000000700000000000000000000000000080008000800080008000800
-00000aa00000000a00000000000f0000000000000880880000000000000000000000700000000700000000700000000000000000008080000080800000808000
-0000aaaa00000aaa00000000000f0000000700008880888000000000000000000000700000007700000707000000f00000000000000800000008000000080000
-00000aa00000000a0000000000fff000777077708880888807700000007770000007770000777770000070000007770000007000008080000080800000808000
-00000000000000a000000000000f0000000700008888888000000000000000000000700000077000000707000000f00000000000080008000800080008000800
-000000000000000000000a00000f0000000000000880880000000000000000000000700000070000007000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000088800000000000000000000000000000070000000000000000000000000000000000000000000000000000
-01000100000000000100010000000000004567000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-10000010000000001000001000000000045116700800080008000800080008000800080008000800080008000800080008000800080008000800080008000800
-10000010000000001000001000000000441111770080800000808000008080000080800000808000008080000080800000808000008080000080800000808000
-11005116000000001100111100000000891111ab0008000000080000000800000008000000080000000800000008000000080000000800000008000000080000
-01455166000000000111111100000000891111ab0080800000808000008080000080800000808000008080000080800000808000008080000080800000808000
-044911a7700000000111111110000000cc1111ff0800080008000800080008000800080008000800080008000800080008000800080008000800080008000800
-8899111aa700000011111111110000000cd11ef00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-8889911aab000000111111111100000000cdef000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000000000000a000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000a00
+0000000000a00000000000000000000000000000008880000000000000000000000000000000700000000000000000000000000000000000000aa0000000a000
+00aa00000a00000000000000000f00000000000008808800000000000000000000070000000070000000070000000000000000000aaa000000aa000000000000
+0aaaa0000aaa000000000000000f000000070000888088800000000000000000000700000007700000707000000f000000000000aaaaa0000aaaaaa000000000
+00aa00000a0000000000000000fff000777077708880888807700000007770000077700007777700000700000077700000007000aaaaa0000aaaa00000000000
+0000000000a0000000000000000f000000070000888888800000000000000000000700000077000000707000000f0000000000000aaa000000aa000000000000
+0000000000000000000a0000000f000000000000088088000000000000000000000700000070000007000000000000000000000000000000000aa0000000a000
+00000000000000000000000000000000000000000088800000000000000000000000000000700000000000000000000000000000000000000000000000000a00
+01000100000000000100010000000000004567004455667700000000000000000000000000000000000000000000000000000000000000000000000000000000
+10000010000000001000001000000000045116704455667708000800080008000800080008000800080008000800080008000800080008000800080008000800
+1000001000000000100000100000000049911aa78899aabb00808000008080000080800000808000008080000080800000808000008080000080800000808000
+11005116000000001100111100000000891111ab8899aabb00080000000800000008000000080000000800000008000000080000000800000008000000080000
+01455166000000000111111100000000891111ab8899aabb00808000008080000080800000808000008080000080800000808000008080000080800000808000
+044911a7700000000111111110000000c9911aaf8899aabb08000800080008000800080008000800080008000800080008000800080008000800080008000800
+8899111aa700000011111111110000000cd11ef0ccddeeff00000000000000000000000000000000000000000000000000000000000000000000000000000000
+8889911aab000000111111111100000000cdef00ccddeeff00000000000000000000000000000000000000000000000000000000000000000000000000000000
 008cddeffb0000000011111111000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 000c0d0f0b0000000001010101000000080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800
 00000000000000000000000000000000008080000080800000808000008080000080800000808000008080000080800000808000008080000080800000808000
