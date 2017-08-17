@@ -17,9 +17,17 @@ hitbox channels:
  4: level exit
 
 render layers:
+ 0: the sky
+ 1: the sun
+ 2: far background entities (clouds)
+ 3: background entities (cliffs)
  4: blood, muzzle flash
  5: ??
  6: twinkle
+
+update priority:
+ 5: ???
+ 6: player
 
 axis:
       +y (up)
@@ -48,6 +56,7 @@ local debug_num_steps=0
 
 -- global vars
 local player
+local sun
 local left_wall
 local right_wall
 local scene
@@ -63,7 +72,6 @@ local new_entities
 local buttons={}
 local button_presses={}
 local light_sources={
-	{x=63,y=1,intensity=3,min_range=10,is_alive=true}
 }
 function noop() end
 
@@ -86,15 +94,71 @@ local color_ramps={
 	brown={1,2,4,4,15}
 }
 local levels={
-	-- name,update
+	-- name,shooter_params
 	{
-		"shotgun joe"
+		"shooter",{
+			name="outlaw 1",
+			behavior=function(self)
+				if self.frames_alive%50==10 then
+					self:shoot()
+				end
+			end
+		},
+		"barrel",{x=35},
+		"cactus",{x=85},
+		"cloud",{x=15}
 	},
 	{
-		"quickdraw jane"
+		"shooter",{
+			name="outlaw 2",
+			behavior=function(self)
+				if self.frames_alive%25==8 then
+					self:shoot()
+				end
+				if self.frames_alive%50==1 then
+					self:jump(0,3)
+				end
+			end
+		},
 	},
 	{
-		"longjohn john"
+		"shooter",{
+			name="outlaw 3",
+			behavior=function(self)
+				if self.frames_alive%5==4 and self.frames_alive%50<=14 then
+					self:shoot()
+				end
+				if self.frames_alive%50==35 then
+					self:shoot()
+				end
+				if self.frames_alive%100==26 then
+					self:jump(0,3)
+				end
+				if self.frames_alive%100==80 then
+					self:jump(0,1)
+				end
+			end
+		},
+	},
+	{
+		"shooter",{
+			name="outlaw 4",
+			behavior=function(self)
+				if self.frames_alive%55==15 then
+					self:jump(0,3)
+				end
+				if self.frames_alive%55==19 then
+					local i
+					for i=-4,4,2 do
+						self:shoot({
+							angle=i,
+							skip_effects=(i!=0),
+							vel_change_frames=22
+						})
+					end
+				end
+			end
+		},
 	}
 }
 local entity_classes={
@@ -159,8 +223,10 @@ local entity_classes={
 	},
 	player={
 		extends="person",
+		x=5,
 		is_crouching=false,
 		is_slide_pause_immune=false,
+		update_priority=6,
 		slash_frames=0,
 		slash_cooldown_frames=0,
 		input_dir=0,
@@ -264,36 +330,43 @@ local entity_classes={
 		end,
 		check_for_hits=function(self,other)
 			return
-				self.slash_frames>=4 and
+				self.slash_frames>=3 and
 				self.slash_frames<=7 and
 				rects_overlapping(
 					self.x-ternary(self.facing<0,7,0),self.y-3,10,10,
 					other.x,other.y,other.width,other.height)
 		end,
-		on_hit=function(self)
-			self.slash_cooldown_frames=max(0,self.slash_cooldown_frames-10)
+		on_hit=function(self,other)
+			other.is_slashed=true
+			self.slash_cooldown_frames=self.slash_frames
 		end,
 		on_hurt=function(self,other)
-			self:super_on_hurt(other)
-			self.slash_frames=0
-			self.pose_frames=0
+			if not other.is_slashed then
+				self:super_on_hurt(other)
+				self.slash_frames=0
+				self.pose_frames=0
+			end
 		end
 	},
 	shooter={
-		-- x,name_tag
+		-- name
 		extends="person",
+		x=118,
 		height=6,
 		facing=-1,
 		hurtbox_channel=1,
 		walk_frames=0,
 		collision_channel=5, -- ground, crates/barrels
+		init=function(self)
+			self.name_tag=create_entity("name_tag",{
+				x=127+self.slide_rate*max(0,slide_frames-1),
+				text=self.name
+			})
+		end,
 		update=function(self)
 			decrement_counter_prop(self,"walk_frames")
-			if not self.has_been_hurt and self.frames_alive%18==3 then
-				-- self:jump(0,2)
-			end
-			if not self.has_been_hurt and self.frames_alive%20==3 then
-				self:shoot({angle=0})
+			if not self.has_been_hurt then
+				self:behavior()
 			end
 			self.vy-=0.2
 			self.standing_platform=nil
@@ -303,6 +376,7 @@ local entity_classes={
 			end
 			self:bleed()
 		end,
+		behavior=noop,
 		walk=function(self,vx,frames)
 			self.vx=vx/4
 			self.walk_frames=frames
@@ -315,7 +389,8 @@ local entity_classes={
 				x=self.x+ternary(self.facing<0,-4,5),
 				y=ceil(self.y+2.5),
 				vx=self.facing,
-				vy=angle/10
+				vy=angle/10,
+				vel_change_frames=options.vel_change_frames or 0
 			})
 			if not options.skip_effects then
 				create_entity("muzzle_flash",{
@@ -358,7 +433,6 @@ local entity_classes={
 			if self.frames_alive>42 and (self.frames_alive-42)%30>10 then
 				spr(53,self.x-6.5,-self.y-14)
 			end
-			self:draw_outline(8)
 		end,
 		draw_shadow=noop,
 		on_hit=function(self)
@@ -368,10 +442,10 @@ local entity_classes={
 		on_death=function(self)
 			freeze_frames=max(freeze_frames,3)
 			pause_frames=max(pause_frames,30)
-			slide_frames=max(slide_frames,59)
-			left_wall.x+=116
-			right_wall.x+=116
-			load_level(level_num+1,116)
+			slide_frames=max(slide_frames,40)
+			left_wall.x+=117
+			right_wall.x+=117
+			load_level(level_num+1,117)
 			-- player:pose()
 		end
 	},
@@ -389,12 +463,23 @@ local entity_classes={
 		hurtbox_channel=1, -- player swing
 		frames_to_death=120,
 		collision_channel=1, -- ground
+		vel_change_frames=0,
+		update=function(self)
+			if decrement_counter_prop(self,"vel_change_frames") then
+				self.vy=0
+			end
+			self:apply_velocity()
+		end,
 		on_collide=function(self)
 			self:die()
 		end,
 		on_hurt=function(self)
 			self:die()
 			create_entity("twinkle",{x=self.x+self.vx,y=self.y+self.vy})
+		end,
+		on_death=function(self)
+			-- todo facing and x+/-1 for facing=-1
+			create_entity("hit_flash",{x=self.x,y=self.y})
 		end
 	},
 	big_bullet={
@@ -501,6 +586,18 @@ local entity_classes={
 			spr(51-ceil(self.frames_to_death/2)+ternary(self.is_big,13,0),self.x+ternary(self.facing<0,-5.5,-0.5),-self.y-3,1,1,self.facing<0)
 		end
 	},
+	hit_flash={
+		frames_to_death=4,
+		intensity=2,
+		max_range=25,
+		facing=1,
+		add_to_game=function(self)
+			add(light_sources,self)
+		end,
+		draw=function(self)
+			spr(43-ceil(self.frames_to_death/2),self.x-ternary(self.facing<0,7,0),-self.y-5,1,1,self.facing<0)
+		end
+	},
 	debug_cube={
 		width=8,
 		height=8,
@@ -511,7 +608,7 @@ local entity_classes={
 		end,
 		draw=function(self)
 			self:apply_lighting()
-			spr(69,self.x+0.5,-self.y-8)
+			spr(43,self.x+0.5,-self.y-8)
 		end
 	},
 	crate={
@@ -533,6 +630,82 @@ local entity_classes={
 		extends="crate",
 		height=6,
 		sprite=15
+	},
+	background_entity={
+		render_layer=2,
+		flipped=false,
+		init=function(self)
+			self.width=self.bg_params[3]
+			self.height=self.bg_params[4]
+			self.slide_rate=self.bg_params[5]
+		end,
+		draw=function(self)
+			-- self:draw_shape(8)
+			sspr(self.bg_params[1],self.bg_params[2],self.width,self.height,self.x,-self.y-self.height,self.width,self.height,self.flipped)
+		end,
+		draw_shadow=noop
+	},
+	cactus={
+		extends="background_entity",
+		bg_params={0,32,8,12,1.5}
+	},
+	distant_ranch={
+		extends="background_entity",
+		bg_params={8,32,11,5,1}
+	},
+	cloud={
+		extends="background_entity",
+		bg_params={19,32,25,5,0.25},
+		render_layer=2,
+		y=12
+	},
+	big_rise={
+		extends="background_entity",
+		bg_params={8,37,17,7,1}
+	},
+	small_rise={
+		extends="background_entity",
+		bg_params={25,37,9,6,1}
+	},
+	sky={
+		-- x,y,width,height,color_1,color_2,
+		render_layer=0,
+		breakpoint=0, -- 0=all primary, 10=all secondary
+		slide_rate=0,
+		primary_color=9,
+		secondary_color=8,
+		draw=function(self)
+			local x,y,c
+			for y=1,5 do
+				for c=1,6 do
+					pal(c+6,ternary(self.breakpoint+y-5<c,self.primary_color,self.secondary_color))
+				end
+				for x=1,32 do
+					spr(70,4*x-5,-4*y)
+				end
+			end
+		end
+	},
+	sun={
+		slide_rate=0,
+		intensity=3,
+		min_range=15,
+		x=63,
+		y=-4, -- -11 to 3
+		render_layer=1,
+		phase=1,
+		init=function(self)
+			add(light_sources,self)
+		end,
+		draw=function(self)
+			color(({10,9,8})[self.phase])
+			local widths={17,17,17,16,16,15,15,14,13,12,11,9,7,4}
+			local i
+			for i=flr(4-self.y),14 do
+				line(self.x-widths[i],-self.y-i+3,self.x+widths[i],-self.y-i+3)
+			end
+		end,
+		draw_shadow=noop
 	}
 }
 
@@ -610,12 +783,11 @@ function init_game()
 	entities,new_entities={},{}
 	slide_frames=0
 	-- create initial entities
-	player=create_entity("player",{x=6})
+	create_entity("sky")
+	sun=create_entity("sun")
+	player=create_entity("player")
 	left_wall=create_entity("invisible_wall",{x=-3,y=-4,height=40})
 	right_wall=create_entity("invisible_wall",{x=125,y=-4,height=40})
-	create_entity("crate",{x=50})
-	create_entity("crate",{x=52,y=10})
-	create_entity("barrel",{x=30,y=10})
 	-- create_entity("debug_cube",{x=60,y=5})
 	-- load the first level
 	load_level(1,0)
@@ -625,8 +797,12 @@ end
 
 function update_game()
 	debug_num_steps=0
-	local entity
+	-- sort entities for updating
+	sort_list(entities,function(a,b)
+		return a.update_priority>b.update_priority
+	end)
 	-- slide entities
+	local entity
 	slide_frames=decrement_counter(slide_frames)
 	if slide_frames>0 then
 		for entity in all(entities) do
@@ -643,7 +819,7 @@ function update_game()
 			if decrement_counter_prop(entity,"frames_to_death") then
 				entity:die()
 			end
-			if entity.x<-10 then
+			if entity.x+entity.width<-10 then
 				entity:die()
 			end
 		end
@@ -682,17 +858,6 @@ end
 
 function draw_game()
 	camera(-1,-70)
-	-- draw the sky
-	rectfill(0,-20,125,3,9)
-	-- draw the sun
-	color(10)
-	line(63-14, -1, 63+14, -1)
-	line(63-13, -2, 63+13, -2)
-	line(63-12, -3, 63+12, -3)
-	line(63-11, -4, 63+11, -4)
-	line(63-9,  -5, 63+9,  -5)
-	line(63-7,  -6, 63+7,  -6)
-	line(63-4,  -7, 63+4,  -7)
 	-- draw the ground
 	rectfill(0,0,125,3,4)
 	-- draw each entity's shadow
@@ -715,14 +880,12 @@ end
 function load_level(num,offset)
 	level_num=num
 	local level=levels[level_num]
-	local name_tag=create_entity("name_tag",{
-		x=127+offset,
-		text=level[1]
-	})
-	create_entity("shooter",{
-		x=117+offset,
-		name_tag=name_tag
-	})
+	local i
+	for i=1,#level,2 do
+		local entity=create_entity(level[i],level[i+1],true)
+		entity.x+=offset
+		init_entity(entity,level[i+1])
+	end
 end
 
 
@@ -738,17 +901,18 @@ function create_entity(class_name,args,skip_init)
 			is_alive=true,
 			frames_alive=0,
 			frames_to_death=0,
+			update_priority=5,
 			render_layer=5,
 			color_ramp=color_ramps.grey,
 			is_pause_immune=false,
 			is_slide_pause_immune=true, -- todo
-			slide_rate=2,
+			slide_rate=3,
 			gravity=0,
 			-- spatial props
 			x=0,
 			y=0,
-			width=0,
-			height=0,
+			width=1,
+			height=1,
 			vx=0,
 			vy=0,
 			-- collision props
@@ -771,7 +935,7 @@ function create_entity(class_name,args,skip_init)
 				self:draw_shape(1)
 			end,
 			draw_shadow=function(self)
-				local slope=(self.x-62)/15
+				local slope=(self.x-62)/(16+sun.y)
 				local y
 				local left=self.x+0.5
 				local right=self.x+self.width-0.5
@@ -786,10 +950,10 @@ function create_entity(class_name,args,skip_init)
 				end
 			end,
 			draw_outline=function(self,color)
-				rect(self.x+0.5,-self.y-1,self.x+self.width-0.5,-self.y-self.height,color)
+				rect(self.x+0.5,-self.y-1,self.x+max(1,self.width)-0.5,-self.y-max(1,self.height),color)
 			end,
 			draw_shape=function(self,color)
-				rectfill(self.x+0.5,-self.y-1,self.x+self.width-0.5,-self.y-self.height,color)
+				rectfill(self.x+0.5,-self.y-1,self.x+max(1,self.width)-0.5,-self.y-max(1,self.height),color)
 			end,
 			apply_lighting=function(self,flipped)
 				local c
@@ -806,6 +970,7 @@ function create_entity(class_name,args,skip_init)
 					surface_x,surface_y=normalize(surface_x,surface_y)
 					local surface_penalty=ternary(c==9 or c==10,1,0)
 					local color_index=1
+					local ramp=self.color_ramp
 					for light_source in all(light_sources) do
 						local dx=mid(-100,light_source.x-self.x-self.width/2,100)
 						local dy=mid(-100,light_source.y-self.y-self.height/2,100)
@@ -821,9 +986,13 @@ function create_entity(class_name,args,skip_init)
 						elseif light_source.max_range then
 							max_color_index*=1-mid(0,(dist-min_range)/(light_source.max_range-min_range),1)
 						end
-						color_index=max(color_index,mid(1,flr(max_color_index*dot)-surface_penalty,5))
+						local new_color_index=mid(1,flr(max_color_index*dot)-surface_penalty,5)
+						if new_color_index>=color_index then
+							color_index=new_color_index
+							ramp=ternary(light_source.light_ramp,light_source.light_ramp,self.color_ramp)
+						end
 					end
-					pal(c,self.color_ramp[color_index])
+					pal(c,ramp[color_index])
 				end
 			end,
 			die=function(self)
@@ -912,13 +1081,17 @@ function create_entity(class_name,args,skip_init)
 		entity[k]=v
 	end
 	if not skip_init then
-		-- initialize it
-		entity:init(args or {})
-		-- add it to the list of entities-to-be-added
-		add(new_entities,entity)
+		init_entity(entity,args)
 	end
 	-- return it
 	return entity
+end
+
+function init_entity(entity,args)
+	-- initialize it
+	entity:init(args or {})
+	-- add it to the list of entities-to-be-added
+	add(new_entities,entity)
 end
 
 function add_new_entities()
@@ -1100,14 +1273,14 @@ __gfx__
 0000000000007777100000777777700007777770000777007000077000000000000700880081b0100081b0100081b0100811b000004000000800080008000800
 000000000000007770000000777000000077700000000770000000777000000000700088008eb000008eb000008eb0000081b000041777000000000000000000
 00000000000000000000000077700000007770000000770700000077700000007770008800c0f000000c00000c000f00000c0f00081111b00000000000000000
-01000000000000771000007777777000000777700007700770007700000000000000008800000000000000000000000000000000000000000000000000000000
-07100000000077710000000777777000000777700077707770007000000000000000008808000800080008000800080008000800080008000800080008000800
-07710000000077710000000007771100000777770077007777070000000700100000008800808000008080000080800000808000008080000080800000808000
-07000000000770100000000001110000000777770770077777001000007701000000008800080000000800000008000000080000000800000008000000080000
-00000000000000000000000000000000001777770770177777010000077717000000008800808000008080000080800000808000008080000080800000808000
-00000000000000000000000000000000000177700701777770177007777000700000008808000800080008000800080008000800080008000800080008000800
-00000000000000000000000000000000000017700017777770007777777000777000008800000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000070000000777000000077700000007770008800000000000000000000000000000000000000000000000000000000
+01000000000000771000007777777000000777700007700770007700000000000000008800000000000000004455667700000000000000000000000000000000
+071000000000777100000007777770000007777000777077700070000000000000000088000000000000a0004455667708000800080008000800080008000800
+077100000000777100000000077711000007777700770077770700000007001000000088000a0000000000008899aabb00808000008080000080800000808000
+07000000000770100000000001110000000777770770077777001000007701000000008800a00000000000008899aabb00080000000800000008000000080000
+0000000000000000000000000000000000177777077017777701000007771700000000880a000000000000008899aabb00808000008080000080800000808000
+00000000000000000000000000000000000177700701777770177007777000700000008800a00000000000008899aabb08000800080008000800080008000800
+00000000000000000000000000000000000017700017777770007777777000777000008800000000000a0000ccddeeff00000000000000000000000000000000
+0000000000000000000000000000000000007000000077700000007770000000777000880000000000000000ccddeeff00000000000000000000000000000000
 0000000000000000000a000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000a00
 0000000000a00000000000000000000000000000008880000000000000000000000000000000700000000000000000000000000000000000000aa0000000a000
 00aa00000a00000000000000000f00000000000008808800000000000000000000070000000070000000070000000000000000000aaa000000aa000000000000
@@ -1116,28 +1289,28 @@ __gfx__
 0000000000a0000000000000000f000000070000888888800000000000000000000700000077000000707000000f0000000000000aaa000000aa000000000000
 0000000000000000000a0000000f000000000000088088000000000000000000000700000070000007000000000000000000000000000000000aa0000000a000
 00000000000000000000000000000000000000000088800000000000000000000000000000700000000000000000000000000000000000000000000000000a00
-01000100000000000100010000000000004567004455667700000000000000000000000000000000000000000000000000000000000000000000000000000000
-10000010000000001000001000000000045116704455667708000800080008000800080008000800080008000800080008000800080008000800080008000800
-1000001000000000100000100000000049911aa78899aabb00808000008080000080800000808000008080000080800000808000008080000080800000808000
-11005116000000001100111100000000891111ab8899aabb00080000000800000008000000080000000800000008000000080000000800000008000000080000
-01455166000000000111111100000000891111ab8899aabb00808000008080000080800000808000008080000080800000808000008080000080800000808000
-044911a7700000000111111110000000c9911aaf8899aabb08000800080008000800080008000800080008000800080008000800080008000800080008000800
-8899111aa700000011111111110000000cd11ef0ccddeeff00000000000000000000000000000000000000000000000000000000000000000000000000000000
-8889911aab000000111111111100000000cdef00ccddeeff00000000000000000000000000000000000000000000000000000000000000000000000000000000
-008cddeffb0000000011111111000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-000c0d0f0b0000000001010101000000080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800
-00000000000000000000000000000000008080000080800000808000008080000080800000808000008080000080800000808000008080000080800000808000
-00000000000000000000000000000000000800000008000000080000000800000008000000080000000800000008000000080000000800000008000000080000
-00000000000000000000000000000000008080000080800000808000008080000080800000808000008080000080800000808000008080000080800000808000
-00000000000000000000000000000000080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800
+00044000000000004000000ffffff0000000000000000000c7a80000000000000000000000000000000000000000000000000000000000000000000000000000
+0004400000000004440000fffffffff000000000000000008b9b0000080008000800080008000800080008000800080008000800080008000800080008000800
+4404400000000044444000ffffffffff0000000000000000a8c70000008080000080800000808000008080000080800000808000008080000080800000808000
+440440004444444444400fffffffffffffff0000000000009b8b0000000800000008000000080000000800000008000000080000000800000008000000080000
+4444400040404044444ffffffffffffffffffff00fff000000000000008080000080800000808000008080000080800000808000008080000080800000808000
+04444044000044444444400000044444000000000000000000000000080008000800080008000800080008000800080008000800080008000800080008000800
+00044044000444444444440000044444000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00044444000444444444440000044444000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00044440000444444444440000444444400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00044000004444444444444000444444400000000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800
+00044000004444444444444004444444440000000080800000808000008080000080800000808000008080000080800000808000008080000080800000808000
+00044000444444444444444440000000000000000008000000080000000800000008000000080000000800000008000000080000000800000008000000080000
+00000000000000000000000000000000000000000080800000808000008080000080800000808000008080000080800000808000008080000080800000808000
+00000000000000000000000000000000000000000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-08000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800
-00808000008080000080800000808000008080000080800000808000008080000080800000808000008080000080800000808000008080000080800000808000
-00080000000800000008000000080000000800000008000000080000000800000008000000080000000800000008000000080000000800000008000000080000
-00808000008080000080800000808000008080000080800000808000008080000080800000808000008080000080800000808000008080000080800000808000
-08000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800
+08000800080008000080008000800080080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800
+00808000008080000008080000080800008080000080800000808000008080000080800000808000008080000080800000808000008080000080800000808000
+00080000000800000000800000008000000800000008000000080000000800000008000000080000000800000008000000080000000800000008000000080000
+00808000008080000008080000080800008080000080800000808000008080000080800000808000008080000080800000808000008080000080800000808000
+08000800080008000080008000800080080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
