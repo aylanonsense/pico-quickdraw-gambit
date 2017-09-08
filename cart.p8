@@ -9,13 +9,15 @@ quickdraw gambit?
 collision channels:
   1: ground
   2: left wall, right wall
-  4: crates/barrels
+  4: crates
+  8: barrels
 
 hitbox channels:
  1: player swing
  2: enemy bullets
  4: level exit
  8: explosions
+ 16: rolling barrels
 
 render layers:
  0: the sky
@@ -174,14 +176,24 @@ local levels={
 	{
 		"shooter",{
 			name="outlaw 5",
-			weapon="dynamite",
+			weapon="barrels",
 			behavior=function(self)
 				if self.frames_alive%80==5 then
 					self:shoot()
 				end
 			end
 		},
-		"barrel",{x=40}
+		-- "barrel",{x=40},
+		-- "barrel",{x=50},
+		-- "barrel",{x=60,y=10},
+		-- "barrel",{x=60,y=20},
+		-- "barrel",{x=60},
+		-- "barrel",{x=70},
+		-- "barrel",{x=80},
+		"barrel",{x=20},
+		"crate",{x=110}
+		-- "rolling_barrel",{x=100,vx=-1},
+		-- "rolling_barrel",{x=35,y=3,vx=1}
 	}
 }
 local entity_classes={
@@ -192,7 +204,7 @@ local entity_classes={
 		facing=1,
 		anti_grav_frames=0,
 		-- collision props
-		collision_channel=7, -- ground, invisible walls, crates/barrels
+		collision_channel=15, -- ground, invisible walls, crates, barrels
 		standing_platform=nil,
 		-- state props
 		is_jumping=false,
@@ -263,7 +275,7 @@ local entity_classes={
 		pose_frames=0,
 		hitbox_channel=1,
 		causes_bleeding=true,
-		hurtbox_channel=14, -- enemy bullets, level exit, explosions
+		hurtbox_channel=30, -- enemy bullets, level exit, explosions, rolling barrels
 		update=function(self)
 			decrement_counter_prop(self,"pose_frames")
 			decrement_counter_prop(self,"slash_frames")
@@ -367,7 +379,7 @@ local entity_classes={
 					other.x,other.y,other.width,other.height)
 		end,
 		on_hit=function(self,other)
-			other.is_slashed=true
+			-- other.is_slashed=true
 			self.slash_cooldown_frames=self.slash_frames
 		end,
 		on_hurt=function(self,other)
@@ -386,7 +398,7 @@ local entity_classes={
 		facing=-1,
 		hurtbox_channel=1,
 		walk_frames=0,
-		collision_channel=5, -- ground, crates/barrels
+		collision_channel=13, -- ground, crates, barrels
 		weapon="gun",
 		init=function(self)
 			self.name_tag=create_entity("name_tag",{
@@ -440,6 +452,12 @@ local entity_classes={
 				create_entity("dynamite",{
 					x=self.x+ternary(self.facing<0,-1,2),
 					y=ceil(self.y+1.5)
+				})
+			elseif self.weapon=="barrels" then
+				create_entity("rolling_barrel",{
+					x=self.x+ternary(self.facing<0,-1,0),
+					y=self.y+2,
+					vx=self.facing
 				})
 			end
 		end,
@@ -526,6 +544,7 @@ local entity_classes={
 			self:die()
 		end,
 		on_hurt=function(self)
+			self.is_slashed=true;
 			self:die()
 			create_entity("twinkle",{x=self.x+self.vx,y=self.y+self.vy})
 			freeze_frames=max(freeze_frames,2)
@@ -570,7 +589,7 @@ local entity_classes={
 		height=3,
 		vx=-1.75,
 		vy=1.6,
-		collision_channel=5, -- ground, crates/barrels
+		collision_channel=13, -- ground, crates, barrels
 		-- hitbox_channel=2, -- enemy bullets
 		hurtbox_channel=1, -- player swing
 		is_light_source=true,
@@ -734,8 +753,8 @@ local entity_classes={
 	crate={
 		width=4,
 		height=4,
-		collision_channel=5, -- ground, crates/barrels
-		platform_channel=4, -- crates/barrels
+		collision_channel=13, -- ground, crates, barrels
+		platform_channel=4, -- crates
 		hurtbox_channel=2, -- bullets
 		gravity=0.2,
 		color_ramp=color_ramps.brown,
@@ -779,7 +798,69 @@ local entity_classes={
 	barrel={
 		extends="crate",
 		height=6,
-		sprite=15
+		sprite=15,
+		platform_channel=8, -- barrels
+		hurtbox_channel=19, -- player swing, bullets, rolling barrels
+		on_hurt=function(self,other)
+			if (other.class_name=="player" and other.y<self.y+self.height) then
+				self:despawn()
+				create_entity("rolling_barrel",{
+					x=self.x,
+					y=self.y+1,
+					vx=other.facing
+				})
+			elseif other.class_name=="rolling_barrel" then
+				self:despawn()
+				create_entity("rolling_barrel",{
+					x=self.x,
+					y=self.y+1,
+					vx=other.vx
+				})
+			end
+		end
+	},
+	rolling_barrel={
+		height=4,
+		width=4,
+		vy=1,
+		collision_channel=5, -- ground, crates
+		bounce_x=1,
+		color_ramp=color_ramps.brown,
+		hurtlock_frames=5,
+		hitbox_channel=16, -- rolling barrels
+		hurtbox_channel=19, -- player swing, bullets, rolling barrels
+		update=function(self)
+			self.vy-=0.1
+			self:apply_velocity()
+		end,
+		on_hit=function(self,other)
+			other:on_hurt(self)
+			self:bounce_off(other)
+			return false
+		end,
+		on_hurt=function(self,other)
+			self:bounce_off(other)
+		end,
+		on_collide=function(self,dir)
+			if dir=="bottom" then
+				self.vy=0.7
+			elseif dir=="left" or dir=="right" then
+				self.vy=1
+			end
+		end,
+		bounce_off=function(self,other)
+			self.vy=1
+			if other.x<self.x then
+				self.vx=1
+			elseif other.x>self.x then
+				self.vx=-1
+			end
+			self.hurtlock_frames=max(self.hurtlock_frames,4)
+		end,
+		draw=function(self)
+			self:apply_lighting()
+			spr(13,self.x-1.5,-self.y-8)
+		end
 	},
 	background_entity={
 		render_layer=2,
@@ -965,17 +1046,21 @@ function update_game()
 	-- update entities
 	for entity in all(entities) do
 		if (pause_frames<=0 or entity.is_pause_immune) and (slide_frames<=0 or entity.is_slide_pause_immune) then
-			-- call the entity's update function
-			entity:update()
-			-- do some default update stuff
-			increment_counter_prop(entity,"frames_alive")
-			if decrement_counter_prop(entity,"frames_to_death") then
-				entity:die()
-			end
-			-- 10 px out of bounds to the left
-			-- 150px out of bounds to the right
-			if entity.x+entity.width<-10 or entity.x>276 then
-				entity:despawn()
+			decrement_counter_prop(entity,"stasis_frames")
+			if entity.stasis_frames<=0 then
+				-- call the entity's update function
+				entity:update()
+				-- do some default update stuff
+				decrement_counter_prop(entity,"hurtlock_frames")
+				increment_counter_prop(entity,"frames_alive")
+				if decrement_counter_prop(entity,"frames_to_death") then
+					entity:die()
+				end
+				-- 10 px out of bounds to the left
+				-- 150px out of bounds to the right
+				if entity.x+entity.width<-10 or entity.x>276 then
+					entity:despawn()
+				end
 			end
 		end
 	end
@@ -990,7 +1075,7 @@ function update_game()
 	for entity in all(entities) do
 		for entity2 in all(entities) do
 			if (pause_frames<=0 or (entity.is_pause_immune and entity2.is_pause_immune)) and (slide_frames<=0 or (entity.is_slide_pause_immune and entity2.is_slide_pause_immune)) then
-				if entity!=entity2 and band(entity.hitbox_channel,entity2.hurtbox_channel)>0 then
+				if entity!=entity2 and band(entity.hitbox_channel,entity2.hurtbox_channel)>0 and entity2.hurtlock_frames<=0 then
 					if entity:check_for_hits(entity2) then
 						if entity:on_hit(entity2)!=false then
 							entity2:on_hurt(entity)
@@ -1065,13 +1150,14 @@ end
 
 -- entity functions
 function create_entity(class_name,args,skip_init)
-	local superclass_name,entity,k,v=entity_classes[class_name].extends
+	local super_class_name,entity,k,v=entity_classes[class_name].extends
 	-- this entity might extend another
-	if superclass_name then
-		entity=create_entity(superclass_name,args,true)
+	if super_class_name then
+		entity=create_entity(super_class_name,args,true)
 	-- if not, create a default entity
 	else
 		entity={
+			class_name=class_name,
 			is_alive=true,
 			is_light_source=false,
 			frames_alive=0,
@@ -1083,6 +1169,7 @@ function create_entity(class_name,args,skip_init)
 			is_slide_pause_immune=true, -- todo
 			slide_rate=3,
 			gravity=0,
+			stasis_frames=0,
 			-- spatial props
 			x=0,
 			y=0,
@@ -1098,6 +1185,7 @@ function create_entity(class_name,args,skip_init)
 			-- hit props
 			hitbox_channel=0,
 			hurtbox_channel=0,
+			hurtlock_frames=0,
 			-- entity methods
 			init=noop,
 			add_to_game=noop,
@@ -1249,9 +1337,11 @@ function create_entity(class_name,args,skip_init)
 	end
 	-- add class properties/methods onto it
 	for k,v in pairs(entity_classes[class_name]) do
-		if superclass_name and type(entity[k])=="function" then
+		if super_class_name and type(entity[k])=="function" then
 			entity["super_"..k]=entity[k]
 		end
+		entity.super_class_name=super_class_name
+		entity.class_name=class_name
 		entity[k]=v
 	end
 	-- add properties onto it from the arguments
@@ -1439,13 +1529,13 @@ scenes={
 
 __gfx__
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-000470000000000000004700000047000004b00000004b0000047000004700000000000000047000000470000800080008000800080008000000000000000000
-0081b0000004700000081b0000081b000081b00000081b000008b0000081b000000000000081b0000081b1110080800000808000008080000000000000856b00
-1111b0000081b00011111b0011111b001111b00011111b000081b0000081b0000000000000811000008110000008000000080000000800000000000000911a00
-008eb0001111b000008ef0000081f00000cee00000cef000008eb0000081f00004567000008eb100008eb00000808000008080000080800000856b000089ab00
-00c0f0000c11f0000800f00000cf00000c000f000c0f000000c0f00000080f0008111b0000c0f00000c0f0000800080008000800080008000089ab000089ab00
-00000000000000000000000000000000000001000000777000000077700000000000000000000000000000000000000000000000000000000089ab0000911a00
-00000000000000000000000000000000000017700177777770007777777000770000000000000000000000000000000000000000000000000089ab000089ab00
+000470000000000000004700000047000004b00000004b0000047000004700000000000000047000000470000800080008000800000000000000000000000000
+0081b0000004700000081b0000081b000081b00000081b000008b0000081b000000000000081b0000081b1110080800000808000000000000000000000856b00
+1111b0000081b00011111b0011111b001111b00011111b000081b0000081b0000000000000811000008110000008000000080000000000000000000000911a00
+008eb0001111b000008ef0000081f00000cee00000cef000008eb0000081f00004567000008eb100008eb00000808000008080000004700000856b000089ab00
+00c0f0000c11f0000800f00000cf00000c000f000c0f000000c0f00000080f0008111b0000c0f00000c0f00008000800080008000089ab000089ab000089ab00
+000000000000000000000000000000000000010000007770000000777000000000000000000000000000000000000000000000000089ab000089ab0000911a00
+00000000000000000000000000000000000017700177777770007777777000770000000000000000000000000000000000000000000cf0000089ab000089ab00
 00000000000000000000000000000000000177700017777770017777777000770000008800000000000000000000000000000000000000000000000000000000
 07000000000000000000000001110000007777770001777777070077777717700000008800000000000000000000000000000000000000000800080008000800
 77110000000700010000000000071100007777770700077777070000777707000000008800467000004670000046700004670000000000000080800000808000
