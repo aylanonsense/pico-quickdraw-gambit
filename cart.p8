@@ -8,39 +8,48 @@ quickdraw gambit?
 
 need to despawn most things from one level when entering another (barrels that roll off screen...)
 need to come up with another way to create a scrolling background
+need to just make everything way more efficient
 
-quicksand
-crates + barrels exploding
-bullet / cannonball interactions with crates + barrels
-lasso
-boulders
-(jump pads)
-(boomerangs)
-(sandstorm/wind)
-(bow & arrow)
+hazards so far:
+	bullets
+	cannonballs
+	dynamite
+	rolling barrels
+	rolling explosive barrels
+	quicksand
 
+hazards to build:
+	lasso
+	boulders
+	quickshot
+	(jump pads)
+	(boomerangs)
+	(sandstorm/wind)
+	(bow & arrow)
 
-collision channels:
-  1: ground
-  2: left wall, right wall
-  4: crates
-  8: barrels
+collision_channels:
+	1: ground
+	2: left wall, right wall
+	4: crates
+	8: barrels
 
-hitbox channels:
- 1: player swing
- 2: enemy bullets
- 4: level exit
- 8: explosions
- 16: rolling barrels
+hitbox_channels:
+	1: player swing
+	2: enemy bullets
+	4: level exit
+	8: explosions
+	16: rolling barrels
+	32: quicksand
 
-render layers:
- 0: the sky
- 1: the sun
- 2: far background entities (clouds)
- 3: background entities (ridges)
- 4: blood, muzzle flash
- 5: ??
- 6: twinkle
+render_layers:
+	0: the sky
+	1: the sun
+	2: far background entities (clouds)
+	3: background entities (ridges)
+	4: blood, muzzle flash
+	5: ??
+	6: twinkle
+	7: quicksand
 
 update priority:
  5: ???
@@ -117,20 +126,21 @@ local levels={
 	{
 		"shooter",{
 			name="outlaw 1",
+			weapon="barrels",
 			behavior=function(self)
 				if self.frames_alive%50==10 then
-					self:shoot({is_cannonball=true})
+					self:shoot()
 				end
 			end
 		},
-		"barrel",{x=35},
+		"rolling_barrel",{x=20},
+		-- "barrel",{x=20,y=10},
 		"cactus",{x=88},
 		"small_ridge",{x=58+7},
 		"tiny_ridge",{x=66+7},
 		"cloud",{x=15},
-		"crate",{x=110},
-		"crate",{x=110,y=4},
-		"crate",{x=50}
+		"crate",{x=50},
+		"quicksand",{x=20,width=2+8*4}
 	},
 	{
 		"shooter",{
@@ -296,7 +306,7 @@ local entity_classes={
 		pose_frames=0,
 		hitbox_channel=1,
 		causes_bleeding=true,
-		hurtbox_channel=30, -- enemy bullets, level exit, explosions, rolling barrels
+		hurtbox_channel=62, -- enemy bullets, level exit, explosions, rolling barrels, quicksand
 		update=function(self)
 			decrement_counter_prop(self,"pose_frames")
 			decrement_counter_prop(self,"slash_frames")
@@ -310,7 +320,7 @@ local entity_classes={
 					self.facing=self.input_dir
 				end
 				-- slash
-				if self.slash_cooldown_frames==0 and (buttons[4] or buttons[5]) then
+				if self.slash_cooldown_frames==0 and (buttons[4] or buttons[5]) and not self.is_stuck_in_quicksand then
 					self.slash_dir*=-1
 					self.slash_frames=9
 					self.slash_cooldown_frames=20
@@ -357,7 +367,9 @@ local entity_classes={
 		draw=function(self)
 			-- figure out the correct sprite
 			local sprite=0
-			if self.has_been_hurt then
+			if self.is_stuck_in_quicksand then
+				sprite=ternary(self.has_been_hurt,8,0)
+			elseif self.has_been_hurt then
 				sprite=ternary(self.standing_platform,8,7)
 			elseif self.pose_frames>0 and self.pose_frames<45 then
 				sprite=ternary(self.pose_frames>40,9,10)
@@ -406,6 +418,7 @@ local entity_classes={
 		on_hurt=function(self,other)
 			if not other.is_slashed then
 				self:super_on_hurt(other)
+				self.hurtbox_channel=32 -- quicksand
 				self.slash_frames=0
 				self.pose_frames=0
 			end
@@ -482,6 +495,7 @@ local entity_classes={
 					vx=self.facing,
 					small_bounce_vy=ternary(self.y>5,1.4,0.7),
 					large_bounce_vy=ternary(self.y>5,1.7,1),
+					is_explosive=options.is_explosive
 				})
 			end
 		end,
@@ -781,7 +795,7 @@ local entity_classes={
 		width=12,
 		height=7,
 		sprite_height=15,
-		hitbox_channel=8, -- explosions
+		-- hitbox_channel=8, -- explosions
 		frames_to_death=15,
 		is_light_source=true,
 		intensity=4,
@@ -796,9 +810,7 @@ local entity_classes={
 			end
 		end,
 		update=function(self)
-			if self.frames_alive>3 then
-				self.hitbox_channel=0
-			end
+			self.hitbox_channel=ternary(self.frames_alive==2,8,0)
 			self.intensity-=0.2
 		end,
 		draw=function(self)
@@ -808,12 +820,39 @@ local entity_classes={
 		draw_shadow=noop,
 		on_hit=noop
 	},
+	quicksand={
+		-- width=4n+2
+		height=4.01,
+		y=-4,
+		hitbox_channel=32,
+		render_layer=7,
+		on_hit=function(self,other)
+			if not other.is_stuck_in_quicksand then
+				other.is_stuck_in_quicksand=true
+				other.y-=1
+				other:on_stuck()
+			end
+			return false
+		end,
+		draw=function(self)
+			-- self:draw_shape(8)
+			for x=self.x,self.x+self.width+4,4 do
+				spr(ternary(x==self.x,126,127),x-5.5,-self.y-7)
+			end
+		end,
+		draw_shadow=function(self)
+			-- self:draw_shape(8)
+			for x=self.x,self.x+self.width+4,4 do
+				spr(ternary(x==self.x,110,111),x-5.5,-self.y-7)
+			end
+		end,
+	},
 	crate={
 		width=4,
 		height=4,
 		collision_channel=13, -- ground, crates, barrels
 		platform_channel=4, -- crates
-		hurtbox_channel=10, -- bullets, explosions
+		hurtbox_channel=42, -- bullets, explosions, quicksand
 		gravity=0.2,
 		color_ramp=color_ramps.brown,
 		sprite=14,
@@ -836,23 +875,34 @@ local entity_classes={
 		height=6,
 		sprite=15,
 		platform_channel=8, -- barrels
-		hurtbox_channel=27, -- player swing, bullets, rolling barrels, explosions
+		hurtbox_channel=59, -- player swing, bullets, rolling barrels, explosions, quicksand
+		is_explosive=false,
+		init=function(self)
+			if self.is_explosive then
+				self.color_ramp=color_ramps.red
+			end
+		end,
 		on_hurt=function(self,other)
 			if other.is_destructive then
+				if self.is_explosive then
+					create_entity("explosion",{x=self.x-4,y=self.y})
+				end
 				self:die()
 			elseif other.class_name=="player" and other.y<self.y+self.height then
 				self:despawn()
 				create_entity("rolling_barrel",{
 					x=self.x,
 					y=self.y+1,
-					vx=other.facing
+					vx=other.facing,
+					is_explosive=self.is_explosive
 				})
 			elseif other.class_name=="rolling_barrel" then
 				self:despawn()
 				create_entity("rolling_barrel",{
 					x=self.x,
 					y=self.y+1,
-					vx=other.vx
+					vx=other.vx,
+					is_explosive=self.is_explosive
 				})
 			end
 		end,
@@ -903,11 +953,17 @@ local entity_classes={
 		color_ramp=color_ramps.brown,
 		hurtlock_frames=5,
 		hitbox_channel=16, -- rolling barrels
-		hurtbox_channel=27, -- player swing, bullets, rolling barrels, explosions
+		hurtbox_channel=59, -- player swing, bullets, rolling barrels, explosions, quicksand
 		large_bounce_vy=1,
 		small_bounce_vy=0.7,
+		gravity=0.1,
+		is_explosive=false,
+		init=function(self)
+			if self.is_explosive then
+				self.color_ramp=color_ramps.red
+			end
+		end,
 		update=function(self)
-			self.vy-=0.1
 			self:apply_velocity()
 		end,
 		on_hit=function(self,other)
@@ -915,9 +971,16 @@ local entity_classes={
 			self:bounce_off(other)
 			return false
 		end,
+		on_stuck=function(self)
+			self:despawn()
+			create_entity("barrel",{x=self.x,y=self.y-1})
+		end,
 		on_hurt=function(self,other)
 			if other.is_destructive then
-				self:die()	
+				if self.is_explosive then
+					create_entity("explosion",{x=self.x-4,y=self.y+2})
+				end
+				self:die()
 			-- bug: player still gets a slash reset
 			elseif other.class_name!="player" or other.y<self.y+self.height then
 				self:bounce_off(other)
@@ -1089,11 +1152,11 @@ function _draw()
 	-- call the draw function of the current scene
 	scenes[scene][3]()
 	-- draw debug info
-	-- camera()
-	-- print("steps:    "..debug_num_steps,2,100,ternary(debug_num_steps>=20,2,1))
-	-- print("mem:      "..flr(100*(stat(0)/1024)).."%",2,107,ternary(stat(1)>=820,2,1))
-	-- print("cpu:      "..flr(100*stat(1)).."%",2,114,ternary(stat(1)>=.8,2,1))
-	-- print("entities: "..#entities,2,121,ternary(#entities>50,2,1))
+	camera()
+	print("steps:    "..debug_num_steps,2,100,ternary(debug_num_steps>=50,2,1))
+	print("mem:      "..flr(100*(stat(0)/1024)).."%",2,107,ternary(stat(1)>=1024,2,1))
+	print("cpu:      "..flr(100*stat(1)).."%",2,114,ternary(stat(1)>=1,2,1))
+	print("entities: "..#entities,2,121,ternary(#entities>50,2,1))
 end
 
 
@@ -1360,44 +1423,53 @@ function create_entity(class_name,args,skip_init)
 				self.x-=self.slide_rate
 			end,
 			apply_velocity=function(self)
-				self.vy-=self.gravity
-				local vx,vy=self.vx,self.vy
-				if self.collision_channel<=1 and self.platform_channel<=0 then
-					self.x+=vx
-					self.y+=vy
-				elseif vx!=0 or vy!=0 then
-					local move_steps,t,entity,dir=ceil(max(abs(vx),abs(vy))/1.05)
-					for t=1,move_steps do
-						debug_num_steps+=1
-						if vx==self.vx then
-							self.x+=vx/move_steps
-						end
-						if vy==self.vy then
-							self.y+=vy/move_steps
-						end
-						-- check for collisions against other entities
-						if self.collision_channel>1 then
-							for dir in all(directions) do
-								for entity in all(entities) do
-									self:check_for_collision(entity,dir)
+				if self.is_stuck_in_quicksand then
+					self.vx=0
+					self.vy=0
+					self.y-=0.05
+					if self.y+self.height<=0 then
+						self:despawn()
+					end
+				else
+					self.vy-=self.gravity
+					local vx,vy=self.vx,self.vy
+					if self.collision_channel<=1 and self.platform_channel<=0 then
+						self.x+=vx
+						self.y+=vy
+					elseif vx!=0 or vy!=0 then
+						local move_steps,t,entity,dir=ceil(max(abs(vx),abs(vy))/1.05)
+						for t=1,move_steps do
+							debug_num_steps+=1
+							if vx==self.vx then
+								self.x+=vx/move_steps
+							end
+							if vy==self.vy then
+								self.y+=vy/move_steps
+							end
+							-- check for collisions against other entities
+							if self.collision_channel>1 then
+								for dir in all(directions) do
+									for entity in all(entities) do
+										self:check_for_collision(entity,dir)
+									end
 								end
 							end
-						end
-						-- if this is a moving obstacle, check to see if it rammed into anything
-						if self.platform_channel>0 then
-							for entity in all(entities) do
-								for dir in all(directions) do
-									entity:check_for_collision(self,dir)
+							-- if this is a moving obstacle, check to see if it rammed into anything
+							if self.platform_channel>0 then
+								for entity in all(entities) do
+									for dir in all(directions) do
+										entity:check_for_collision(self,dir)
+									end
 								end
 							end
 						end
 					end
-				end
-				-- check for collisions against the ground
-				if self.y<0 and self.vy<0 and band(self.collision_channel,1)>0 then
-					self.y=0
-					self.vy=-self.vy*self.bounce_y
-					self:on_collide("bottom",ground)
+					-- check for collisions against the ground
+					if self.y<0 and self.vy<0 and band(self.collision_channel,1)>0 then
+						self.y=0
+						self.vy=-self.vy*self.bounce_y
+						self:on_collide("bottom",ground)
+					end
 				end
 			end,
 			check_for_collision=function(self,platform,dir)
@@ -1412,6 +1484,7 @@ function create_entity(class_name,args,skip_init)
 					self:on_collide(dir,platform)
 				end
 			end,
+			on_stuck=noop,
 			on_collide=noop,
 			check_for_hits=function(self,other)
 				return is_overlapping(self,other)
@@ -1664,21 +1737,21 @@ __gfx__
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-08000800080008000080008000800080080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800
-00808000008080000008080000080800008080000080800000808000008080000080800000808000008080000080800000808000008080000080800000808000
-00080000000800000000800000008000000800000008000000080000000800000008000000080000000800000008000000080000000800000008000000080000
-00808000008080000008080000080800008080000080800000808000008080000080800000808000008080000080800000808000008080000080800000808000
-08000800080008000080008000800080080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800
+08000800080008000080008000800080080008000800080008000800080008000800080008000800080008000800080008000800080008000000000000000000
+00808000008080000008080000080800008080000080800000808000008080000080800000808000008080000080800000808000008080000000000000000000
+00080000000800000000800000008000000800000008000000080000000800000008000000080000000800000008000000080000000800000ff4fff00004fff0
+00808000008080000008080000080800008080000080800000808000008080000080800000808000008080000080800000808000008080000000000000000000
+08000800080008000080008000800080080008000800080008000800080008000800080008000800080008000800080008000800080008000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000800080008000800
-00000000000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000440000080800000808000
-00011100000a0000000001000000100000010000000000000000020000002a000002000000000000004000000004000000004000004004000008000000080000
-000100000002110000a0100000001000000010000001120000001a00000010000000100000444000000400000004000000040000004004000080800000808000
-000000000000000000020000000a20000000a20000000a0000010000000010000000010000000000000040000004000000400000000440000800080008000800
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000440000000000000000000
+00011100000a0000000001000000100000010000000000000000020000002a000002000000000000004000000004000000004000004004000000000000000000
+000100000002110000a0100000001000000010000001120000001a0000001000000010000044400000040000000400000004000000400400444ff440004ff440
+000000000000000000020000000a20000000a20000000a0000010000000010000000010000000000000040000004000000400000000440004444444000f44440
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004444444000444440
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004444444000444440
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000044000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000044000000000000000000000044000000000008000800
 00000000000000000000000000000000000000000000000000000000000044000000000000000000000044400000000000000000000000000000000000808000
