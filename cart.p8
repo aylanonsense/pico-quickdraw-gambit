@@ -6,6 +6,20 @@ __lua__
 
 quickdraw gambit?
 
+need to despawn most things from one level when entering another (barrels that roll off screen...)
+need to come up with another way to create a scrolling background
+
+quicksand
+crates + barrels exploding
+bullet / cannonball interactions with crates + barrels
+lasso
+boulders
+(jump pads)
+(boomerangs)
+(sandstorm/wind)
+(bow & arrow)
+
+
 collision channels:
   1: ground
   2: left wall, right wall
@@ -100,85 +114,92 @@ local color_ramps={
 }
 local levels={
 	-- name,shooter_params
-	-- {
-	-- 	"shooter",{
-	-- 		name="outlaw 1",
-	-- 		behavior=function(self)
-	-- 			if self.frames_alive%50==10 then
-	-- 				self:shoot()
-	-- 			end
-	-- 		end
-	-- 	},
-	-- 	"barrel",{x=35},
-	-- 	"cactus",{x=88},
-	-- 	"small_ridge",{x=58+7},
-	-- 	"tiny_ridge",{x=66+7},
-	-- 	"cloud",{x=15}
-	-- },
-	-- {
-	-- 	"shooter",{
-	-- 		name="jumpin' jane",
-	-- 		behavior=function(self)
-	-- 			if self.frames_alive%25==8 then
-	-- 				self:shoot()
-	-- 			end
-	-- 			if self.frames_alive%50==1 then
-	-- 				self:jump(0,3)
-	-- 			end
-	-- 		end
-	-- 	},
-	-- 	"barrel",{x=35+4},
-	-- 	"cactus",{x=88},
-	-- 	"small_ridge",{x=58+7-44},
-	-- 	"tiny_ridge",{x=66+7-44},
-	-- 	"cloud",{x=15}
-	-- },
-	-- {
-	-- 	"shooter",{
-	-- 		name="outlaw 3",
-	-- 		behavior=function(self)
-	-- 			if self.frames_alive%5==4 and self.frames_alive%50<=14 then
-	-- 				self:shoot()
-	-- 			end
-	-- 			if self.frames_alive%50==35 then
-	-- 				self:shoot()
-	-- 			end
-	-- 			if self.frames_alive%100==26 then
-	-- 				self:jump(0,3)
-	-- 			end
-	-- 			if self.frames_alive%100==80 then
-	-- 				self:jump(0,1)
-	-- 			end
-	-- 		end
-	-- 	},
-	-- },
-	-- {
-	-- 	"shooter",{
-	-- 		name="shotgun shane",
-	-- 		behavior=function(self)
-	-- 			if self.frames_alive%55==15 then
-	-- 				self:jump(0,3)
-	-- 			end
-	-- 			if self.frames_alive%55==19 then
-	-- 				local i
-	-- 				for i=-4,4,2 do
-	-- 					self:shoot({
-	-- 						angle=i,
-	-- 						skip_effects=(i!=0),
-	-- 						vel_change_frames=22
-	-- 					})
-	-- 				end
-	-- 			end
-	-- 		end
-	-- 	},
-	-- 	"distant_ranch",{x=10,flipped=false}
-	-- },
+	{
+		"shooter",{
+			name="outlaw 1",
+			behavior=function(self)
+				if self.frames_alive%50==10 then
+					self:shoot({is_cannonball=true})
+				end
+			end
+		},
+		"barrel",{x=35},
+		"cactus",{x=88},
+		"small_ridge",{x=58+7},
+		"tiny_ridge",{x=66+7},
+		"cloud",{x=15},
+		"crate",{x=110},
+		"crate",{x=110,y=4},
+		"crate",{x=50}
+	},
+	{
+		"shooter",{
+			name="jumpin' jane",
+			behavior=function(self)
+				if self.frames_alive%25==8 then
+					self:shoot()
+				end
+				if self.frames_alive%50==1 then
+					self:jump(0,3)
+				end
+			end
+		},
+		"barrel",{x=35+4},
+		"cactus",{x=88},
+		"small_ridge",{x=58+7-44},
+		"tiny_ridge",{x=66+7-44},
+		"cloud",{x=15}
+	},
+	{
+		"shooter",{
+			name="outlaw 3",
+			behavior=function(self)
+				if self.frames_alive%5==4 and self.frames_alive%50<=14 then
+					self:shoot()
+				end
+				if self.frames_alive%50==35 then
+					self:shoot()
+				end
+				if self.frames_alive%100==26 then
+					self:jump(0,3)
+				end
+				if self.frames_alive%100==80 then
+					self:jump(0,1)
+				end
+			end
+		},
+	},
+	{
+		"shooter",{
+			name="shotgun shane",
+			behavior=function(self)
+				if self.frames_alive%55==15 then
+					self:jump(0,3)
+				end
+				if self.frames_alive%55==19 then
+					local i
+					for i=-4,4,2 do
+						self:shoot({
+							angle=i,
+							skip_effects=(i!=0),
+							vel_change_frames=22
+						})
+					end
+				end
+			end
+		},
+		"distant_ranch",{x=10,flipped=false}
+	},
 	{
 		"shooter",{
 			name="outlaw 5",
 			weapon="barrels",
 			behavior=function(self)
-				if self.frames_alive%80==5 then
+				if self.frames_alive%80==1 then
+					self:jump(0,3)
+				end
+				if self.frames_alive%40==5 then
+					self.weapon="barrels"
 					self:shoot()
 				end
 			end
@@ -428,9 +449,9 @@ local entity_classes={
 			options=options or {}
 			local angle=options.angle or 0
 			if self.weapon=="gun" then
-				create_entity("bullet",{
+				create_entity(ternary(options.is_cannonball,"cannonball","bullet"),{
 					x=self.x+ternary(self.facing<0,-4,5),
-					y=ceil(self.y+2.5),
+					y=ceil(self.y+ternary(options.is_cannonball,1.5,2.5)),
 					vx=self.facing,
 					vy=angle/10,
 					vel_change_frames=options.vel_change_frames or 0
@@ -439,7 +460,8 @@ local entity_classes={
 					create_entity("muzzle_flash",{
 						x=self.x+ternary(self.facing<0,-4,6),
 						y=self.y+4,
-						facing=self.facing
+						facing=self.facing,
+						is_big=options.is_cannonball
 					})
 				end
 			-- elseif self.weapon=="boomerang" then
@@ -457,7 +479,9 @@ local entity_classes={
 				create_entity("rolling_barrel",{
 					x=self.x+ternary(self.facing<0,-1,0),
 					y=self.y+2,
-					vx=self.facing
+					vx=self.facing,
+					small_bounce_vy=ternary(self.y>5,1.4,0.7),
+					large_bounce_vy=ternary(self.y>5,1.7,1),
 				})
 			end
 		end,
@@ -541,6 +565,11 @@ local entity_classes={
 			self:apply_velocity()
 		end,
 		on_collide=function(self)
+			self:spawn_hit_flash()
+			self:die()
+		end,
+		on_hit=function(self)
+			self:spawn_hit_flash()
 			self:die()
 		end,
 		on_hurt=function(self)
@@ -549,17 +578,16 @@ local entity_classes={
 			create_entity("twinkle",{x=self.x+self.vx,y=self.y+self.vy})
 			freeze_frames=max(freeze_frames,2)
 		end,
-		on_death=function(self)
+		spawn_hit_flash=function(self)
 			-- todo facing and x+/-1 for facing=-1
 			create_entity("hit_flash",{x=self.x,y=self.y})
 		end
 	},
-	big_bullet={
-		width=2,
-		height=2,
-		hitbox_channel=2,
-		causes_bleeding=true,
-		frames_to_death=120
+	cannonball={
+		extends="bullet",
+		height=1.1,
+		is_destructive=true,
+		hurtbox_channel=0
 	},
 	boomerang={
 		-- angle (0=up,90=left,180=down,270=right),speed
@@ -750,21 +778,6 @@ local entity_classes={
 			spr(43,self.x+0.5,-self.y-8)
 		end
 	},
-	crate={
-		width=4,
-		height=4,
-		collision_channel=13, -- ground, crates, barrels
-		platform_channel=4, -- crates
-		hurtbox_channel=2, -- bullets
-		gravity=0.2,
-		color_ramp=color_ramps.brown,
-		sprite=14,
-		draw=function(self)
-			self:apply_lighting()
-			spr(self.sprite,self.x-1.5,-self.y-8)
-		end,
-		on_hurt=noop
-	},
 	explosion={
 		width=12,
 		height=7,
@@ -795,6 +808,29 @@ local entity_classes={
 		draw_shadow=noop,
 		on_hit=noop
 	},
+	crate={
+		width=4,
+		height=4,
+		collision_channel=13, -- ground, crates, barrels
+		platform_channel=4, -- crates
+		hurtbox_channel=2, -- bullets
+		gravity=0.2,
+		color_ramp=color_ramps.brown,
+		sprite=14,
+		draw=function(self)
+			self:apply_lighting()
+			spr(self.sprite,self.x-1.5,-self.y-8)
+		end,
+		on_hurt=function(self,other)
+			if other.is_destructive then
+				self:die()
+			end
+		end,
+		on_death=function(self)
+			create_entity("plank",{x=self.x,y=self.y})
+			create_entity("plank",{x=self.x,y=self.y})
+		end
+	},
 	barrel={
 		extends="crate",
 		height=6,
@@ -802,7 +838,9 @@ local entity_classes={
 		platform_channel=8, -- barrels
 		hurtbox_channel=19, -- player swing, bullets, rolling barrels
 		on_hurt=function(self,other)
-			if (other.class_name=="player" and other.y<self.y+self.height) then
+			if other.is_destructive then
+				self:die()
+			elseif other.class_name=="player" and other.y<self.y+self.height then
 				self:despawn()
 				create_entity("rolling_barrel",{
 					x=self.x,
@@ -817,6 +855,43 @@ local entity_classes={
 					vx=other.vx
 				})
 			end
+		end,
+		on_death=function(self)
+			self:super_on_death()
+			create_entity("barrel_ring",{x=self.x,y=self.y})
+		end
+	},
+	plank={
+		width=3,
+		height=3,
+		gravity=0.1,
+		init=function(self)
+			self.vx=rnd(0.8)-0.4
+			self.vy=0.9+rnd(0.7)
+			self.rot_speed=rnd_int(1,2)
+		end,
+		update=function(self)
+			if self.y+self.height<0 then
+				self:die()
+			end
+			self:apply_velocity()
+		end,
+		draw=function(self)
+			local f=flr(self.frames_alive/self.rot_speed)%4
+			spr(121+ternary(self.vx<0,3-f,f),self.x-1.5,-self.y-6)
+		end,
+		draw_shadow=noop
+	},
+	barrel_ring={
+		extends="plank",
+		width=4,
+		height=4,
+		init=function(self)
+			self:super_init()
+			self.vx*=0.4
+		end,
+		draw=function(self)
+			spr(125,self.x-1.5,-self.y-6)
 		end
 	},
 	rolling_barrel={
@@ -829,6 +904,8 @@ local entity_classes={
 		hurtlock_frames=5,
 		hitbox_channel=16, -- rolling barrels
 		hurtbox_channel=19, -- player swing, bullets, rolling barrels
+		large_bounce_vy=1,
+		small_bounce_vy=0.7,
 		update=function(self)
 			self.vy-=0.1
 			self:apply_velocity()
@@ -839,27 +916,37 @@ local entity_classes={
 			return false
 		end,
 		on_hurt=function(self,other)
-			self:bounce_off(other)
+			if other.is_destructive then
+				self:die()	
+			-- bug: player still gets a slash reset
+			elseif other.class_name!="player" or other.y<self.y+self.height then
+				self:bounce_off(other)
+			end
 		end,
 		on_collide=function(self,dir)
 			if dir=="bottom" then
-				self.vy=0.7
+				self.vy=self.small_bounce_vy
 			elseif dir=="left" or dir=="right" then
-				self.vy=1
+				self.vy=self.large_bounce_vy
 			end
 		end,
 		bounce_off=function(self,other)
-			self.vy=1
+			self.vy=self.large_bounce_vy
 			if other.x<self.x then
 				self.vx=1
 			elseif other.x>self.x then
 				self.vx=-1
 			end
-			self.hurtlock_frames=max(self.hurtlock_frames,4)
+			self.hurtlock_frames=max(self.hurtlock_frames,2)
 		end,
 		draw=function(self)
 			self:apply_lighting()
 			spr(13,self.x-1.5,-self.y-8)
+		end,
+		on_death=function(self)
+			create_entity("plank",{x=self.x,y=self.y})
+			create_entity("plank",{x=self.x,y=self.y})
+			create_entity("barrel_ring",{x=self.x,y=self.y})
 		end
 	},
 	background_entity={
@@ -1154,6 +1241,8 @@ function create_entity(class_name,args,skip_init)
 	-- this entity might extend another
 	if super_class_name then
 		entity=create_entity(super_class_name,args,true)
+		entity.super_class_name=super_class_name
+		entity.class_name=class_name
 	-- if not, create a default entity
 	else
 		entity={
@@ -1190,7 +1279,6 @@ function create_entity(class_name,args,skip_init)
 			init=noop,
 			add_to_game=noop,
 			update=function(self)
-				self.vy-=self.gravity
 				self:apply_velocity()
 			end,
 			post_update=noop,
@@ -1272,6 +1360,7 @@ function create_entity(class_name,args,skip_init)
 				self.x-=self.slide_rate
 			end,
 			apply_velocity=function(self)
+				self.vy-=self.gravity
 				local vx,vy=self.vx,self.vy
 				if self.collision_channel<=1 and self.platform_channel<=0 then
 					self.x+=vx
@@ -1340,8 +1429,6 @@ function create_entity(class_name,args,skip_init)
 		if super_class_name and type(entity[k])=="function" then
 			entity["super_"..k]=entity[k]
 		end
-		entity.super_class_name=super_class_name
-		entity.class_name=class_name
 		entity[k]=v
 	end
 	-- add properties onto it from the arguments
@@ -1585,11 +1672,11 @@ __gfx__
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000008000800080008000800080008000800080008000800080008000800
-00000000000000000000000000000000000000000000000000000000000000000000a00000808000008080000080800000808000008080000080800000808000
-00011100000a0000000001000000100000010000000000000000020000002a000002000000080000000800000008000000080000000800000008000000080000
-000100000002110000a0100000001000000010000001120000001a00000010000000100000808000008080000080800000808000008080000080800000808000
-000000000000000000020000000a20000000a20000000a0000010000000010000000010008000800080008000800080008000800080008000800080008000800
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000800080008000800
+00000000000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000440000080800000808000
+00011100000a0000000001000000100000010000000000000000020000002a000002000000000000004000000004000000004000004004000008000000080000
+000100000002110000a0100000001000000010000001120000001a00000010000000100000444000000400000004000000040000004004000080800000808000
+000000000000000000020000000a20000000a20000000a0000010000000010000000010000000000000040000004000000400000000440000800080008000800
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000044000000000000000000
