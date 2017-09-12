@@ -1,7 +1,6 @@
 pico-8 cartridge // http://www.pico-8.com
 version 8
 __lua__
-
 --[[
 
 quickdraw gambit?
@@ -9,19 +8,23 @@ quickdraw gambit?
 need to despawn most things from one level when entering another (barrels that roll off screen...)
 need to come up with another way to create a scrolling background
 need to just make everything way more efficient
+too much screenshake?
+barrels should break on hit?
+cannonballs break boulders...?
 
 hazards so far:
 	bullets
+	quickshot
 	cannonballs
 	dynamite
 	rolling barrels
 	rolling explosive barrels
 	quicksand
+	boulders
 
 hazards to build:
 	lasso
-	boulders
-	quickshot
+	(multi hit obstacles)
 	(jump pads)
 	(boomerangs)
 	(sandstorm/wind)
@@ -32,6 +35,7 @@ collision_channels:
 	2: left wall, right wall
 	4: crates
 	8: barrels
+	16: boulders
 
 hitbox_channels:
 	1: player swing
@@ -40,6 +44,7 @@ hitbox_channels:
 	8: explosions
 	16: rolling barrels
 	32: quicksand
+	64: falling rocks
 
 render_layers:
 	0: the sky
@@ -80,6 +85,8 @@ how pixels should be drawn:
 local debug_skip_amt=1
 local debug_num_steps=0
 
+local quick_mode=false -- false: will pose on screen transition
+
 -- global vars
 local player
 local sun
@@ -93,6 +100,7 @@ local slow_mo_frames
 local freeze_frames
 local pause_frames
 local slide_frames
+local screen_shake_frames
 local skip_frames=0
 local entities
 local new_entities
@@ -122,29 +130,67 @@ local color_ramps={
 	brown={1,2,4,4,15}
 }
 local levels={
-	-- name,shooter_params
+	-- class_name,args,...
 	{
 		"shooter",{
 			name="outlaw 1",
-			weapon="barrels",
+			weapon="gun",
 			behavior=function(self)
-				if self.frames_alive%50==10 then
-					self:shoot()
+				if self.frames_alive%50==2 then
+					self:shoot({is_quickshot=(rnd()<0.5)})
 				end
 			end
 		},
-		"rolling_barrel",{x=20},
-		-- "barrel",{x=20,y=10},
-		"cactus",{x=88},
-		"small_ridge",{x=58+7},
-		"tiny_ridge",{x=66+7},
-		"cloud",{x=15},
-		"crate",{x=50},
-		"quicksand",{x=20,width=2+8*4}
+		"boulder",{x=25},
+		"crate",{x=40},
+		"crate",{x=45},
+		"crate",{x=43,y=10}
 	},
 	{
 		"shooter",{
-			name="jumpin' jane",
+			name="outlaw x",
+			behavior=function(self)
+				if self.frames_alive%40==10 then
+					self:shoot({is_cannonball=true})
+					self:shoot({is_cannonball=true,angle=2,skip_effects=true})
+				end
+				-- if f==10 or f==14 or f==18 or f==28 or f==34 or f==38 then
+				-- 	self:shoot()
+				-- end
+				-- if f==19 then
+				-- 	self:jump(0,4)
+				-- end
+			end
+		}
+	},
+	{
+		"shooter",{
+			name="outlaw x2",
+			behavior=function(self)
+				local f=self.frames_alive%80
+				if f==10 then
+					self:shoot({is_cannonball=true})
+					self:shoot({is_cannonball=true,angle=2,skip_effects=true})
+				end
+				if f==15 then
+					self:jump(0,4)
+				end
+				if f==23 then
+					self:shoot({is_cannonball=true})
+					self:shoot({is_cannonball=true,angle=-2,skip_effects=true})
+				end
+				-- if f==10 or f==14 or f==18 or f==28 or f==34 or f==38 then
+				-- 	self:shoot()
+				-- end
+				-- if f==19 then
+				-- 	self:jump(0,4)
+				-- end
+			end
+		}
+	},
+	{
+		"shooter",{
+			name="outlaw 2",
 			behavior=function(self)
 				if self.frames_alive%25==8 then
 					self:shoot()
@@ -153,12 +199,7 @@ local levels={
 					self:jump(0,3)
 				end
 			end
-		},
-		"barrel",{x=35+4},
-		"cactus",{x=88},
-		"small_ridge",{x=58+7-44},
-		"tiny_ridge",{x=66+7-44},
-		"cloud",{x=15}
+		}
 	},
 	{
 		"shooter",{
@@ -181,7 +222,7 @@ local levels={
 	},
 	{
 		"shooter",{
-			name="shotgun shane",
+			name="outlaw 4",
 			behavior=function(self)
 				if self.frames_alive%55==15 then
 					self:jump(0,3)
@@ -213,19 +254,20 @@ local levels={
 					self:shoot()
 				end
 			end
-		},
-		-- "barrel",{x=40},
-		-- "barrel",{x=50},
-		-- "barrel",{x=60,y=10},
-		-- "barrel",{x=60,y=20},
-		-- "barrel",{x=60},
-		-- "barrel",{x=70},
-		-- "barrel",{x=80},
-		"barrel",{x=20},
-		"crate",{x=110}
-		-- "rolling_barrel",{x=100,vx=-1},
-		-- "rolling_barrel",{x=35,y=3,vx=1}
+		}
 	}
+	-- 	-- "barrel",{x=40},
+	-- 	-- "barrel",{x=50},
+	-- 	-- "barrel",{x=60,y=10},
+	-- 	-- "barrel",{x=60,y=20},
+	-- 	-- "barrel",{x=60},
+	-- 	-- "barrel",{x=70},
+	-- 	-- "barrel",{x=80},
+	-- 	"barrel",{x=20},
+	-- 	"crate",{x=110}
+	-- 	-- "rolling_barrel",{x=100,vx=-1},
+	-- 	-- "rolling_barrel",{x=35,y=3,vx=1}
+	-- }
 }
 local entity_classes={
 	person={
@@ -235,7 +277,7 @@ local entity_classes={
 		facing=1,
 		anti_grav_frames=0,
 		-- collision props
-		collision_channel=15, -- ground, invisible walls, crates, barrels
+		collision_channel=31, -- ground, invisible walls, crates, barrels, boulders
 		standing_platform=nil,
 		-- state props
 		is_jumping=false,
@@ -291,6 +333,7 @@ local entity_classes={
 				self.bleed_frames=10
 			end
 			pause_frames=max(pause_frames,17)
+			screen_shake_frames=max(screen_shake_frames,9)
 		end
 	},
 	player={
@@ -306,7 +349,7 @@ local entity_classes={
 		pose_frames=0,
 		hitbox_channel=1,
 		causes_bleeding=true,
-		hurtbox_channel=62, -- enemy bullets, level exit, explosions, rolling barrels, quicksand
+		hurtbox_channel=126, -- enemy bullets, level exit, explosions, rolling barrels, quicksand, falling rocks
 		update=function(self)
 			decrement_counter_prop(self,"pose_frames")
 			decrement_counter_prop(self,"slash_frames")
@@ -320,7 +363,7 @@ local entity_classes={
 					self.facing=self.input_dir
 				end
 				-- slash
-				if self.slash_cooldown_frames==0 and (buttons[4] or buttons[5]) and not self.is_stuck_in_quicksand then
+				if self.slash_cooldown_frames==0 and buttons[4] and not self.is_stuck_in_quicksand then
 					self.slash_dir*=-1
 					self.slash_frames=9
 					self.slash_cooldown_frames=20
@@ -371,8 +414,15 @@ local entity_classes={
 				sprite=ternary(self.has_been_hurt,8,0)
 			elseif self.has_been_hurt then
 				sprite=ternary(self.standing_platform,8,7)
-			elseif self.pose_frames>0 and self.pose_frames<45 then
-				sprite=ternary(self.pose_frames>40,9,10)
+			elseif self.pose_frames>0 then
+				if self.pose_frames<30 then
+					sprite=10
+				elseif self.pose_frames<35 then
+					sprite=9
+				else
+					sprite=0
+				end
+				-- sprite=ternary(self.pose_frames>40,9,10)
 			elseif self.slash_frames>0 then
 				sprite=ternary(self.is_jumping and self.vx!=0 and (self.facing<0)==(self.vx<0),7,6)
 			elseif self.is_jumping then
@@ -392,13 +442,13 @@ local entity_classes={
 				sspr(10*slash_sprite,ternary(self.slash_dir<0,15,6),10,9,self.x-ternary(self.facing<0,4.5,1.5),-self.y-7,10,9,self.facing<0)
 			end
 			-- draw pose schwing
-			if self.pose_frames==mid(17,self.pose_frames,30) then
-				local pose_sprite=flr(60-(self.pose_frames-18)/2)
+			if self.pose_frames==mid(7,self.pose_frames,20) then
+				local pose_sprite=flr(60-(self.pose_frames-8)/2)
 				spr(pose_sprite,self.x+ternary(self.facing<0,-5.5,1.5),-self.y-8,1,1,self.facing<0)
 			end
 		end,
 		pose=function(self)
-			self.pose_frames=45
+			self.pose_frames=40
 			self.is_jumping_upwards=false
 			self.slash_frames=0
 			self.facing=1
@@ -414,6 +464,10 @@ local entity_classes={
 		on_hit=function(self,other)
 			-- other.is_slashed=true
 			self.slash_cooldown_frames=self.slash_frames
+			screen_shake_frames=max(screen_shake_frames,4)
+			if other.class_name!="shooter" then
+				freeze_frames=max(freeze_frames,3)
+			end
 		end,
 		on_hurt=function(self,other)
 			if not other.is_slashed then
@@ -462,13 +516,20 @@ local entity_classes={
 			options=options or {}
 			local angle=options.angle or 0
 			if self.weapon=="gun" then
-				create_entity(ternary(options.is_cannonball,"cannonball","bullet"),{
+				local params={
 					x=self.x+ternary(self.facing<0,-4,5),
 					y=ceil(self.y+ternary(options.is_cannonball,1.5,2.5)),
-					vx=self.facing,
+					vx=ternary(options.is_quickshot,3,1)*self.facing,
 					vy=angle/10,
 					vel_change_frames=options.vel_change_frames or 0
-				})
+				}
+				if options.is_cannonball then
+					create_entity("cannonball",params)
+				elseif options.is_quickshot then
+					create_entity("quickshot",params)
+				else
+					create_entity("bullet",params)
+				end
 				if not options.skip_effects then
 					create_entity("muzzle_flash",{
 						x=self.x+ternary(self.facing<0,-4,6),
@@ -511,7 +572,7 @@ local entity_classes={
 			elseif vx!=0 and self.standing_platform then
 				sprite=ternary(self.walk_frames%10<5,25,26)
 			end
-			spr(sprite,self.x-ternary(self.facing<0,2.5,1.5),-self.y-7.5,1,1,self.facing<0)
+			spr(sprite,self.x-ternary(self.facing<0,2.5,1.5),-self.y-8,1,1,self.facing<0)
 			-- draw weapon
 			local weapon_sprite=nil
 			if self.weapon=="gun" then
@@ -548,12 +609,14 @@ local entity_classes={
 		end,
 		on_death=function(self)
 			freeze_frames=max(freeze_frames,3)
-			pause_frames=max(pause_frames,30)
+			if not quick_mode then
+				pause_frames=max(pause_frames,40)
+				player:pose()
+			end
 			slide_frames=max(slide_frames,40)
 			left_wall.x+=117
 			right_wall.x+=117
 			load_level(level_num+1,117)
-			-- player:pose()
 		end
 	},
 	invisible_wall={
@@ -578,6 +641,9 @@ local entity_classes={
 			end
 			self:apply_velocity()
 		end,
+		draw=function(self)
+			self:draw_shape(1,1)
+		end,
 		on_collide=function(self)
 			self:spawn_hit_flash()
 			self:die()
@@ -590,7 +656,7 @@ local entity_classes={
 			self.is_slashed=true;
 			self:die()
 			create_entity("twinkle",{x=self.x+self.vx,y=self.y+self.vy})
-			freeze_frames=max(freeze_frames,2)
+			-- freeze_frames=max(freeze_frames,2)
 		end,
 		spawn_hit_flash=function(self)
 			-- todo facing and x+/-1 for facing=-1
@@ -601,7 +667,20 @@ local entity_classes={
 		extends="bullet",
 		height=1.1,
 		is_destructive=true,
-		hurtbox_channel=0
+		hurtbox_channel=0,
+		draw=function(self)
+			self:draw_shape(1,2)
+		end
+	},
+	quickshot={
+		extends="bullet",
+		width=3,
+		draw=function(self)
+			self:draw_shape(1)
+			if self.frames_alive>3 then
+				spr(107+flr(self.frames_alive/2)%3,self.x+3.5,-self.y-5)
+			end
+		end
 	},
 	boomerang={
 		-- angle (0=up,90=left,180=down,270=right),speed
@@ -641,13 +720,12 @@ local entity_classes={
 			self.vy-=0.07
 			local f=flr(self.frames_alive/4)
 			if self.y>5 then
-				add(smoke,{
-					x=self.x+({-1,0,1,0})[1+f%4],
-					y=self.y+({1.1,0.1,1.1,2.1})[1+f%4],
-					vx=self.vx/4,
-					vy=max(-0.25,self.vy/4),
-					frames_to_death=rnd_int(5,20)
-				})
+				add_smoke(
+					self.x+({-1,0,1,0})[1+f%4],
+					self.y+({1.1,0.1,1.1,2.1})[1+f%4],
+					self.vx/4,
+					max(-0.25,self.vy/4)
+				)
 			end
 			self:apply_velocity()
 		end,
@@ -808,6 +886,7 @@ local entity_classes={
 				self.height+=5
 				self.sprite_height=21
 			end
+			screen_shake_frames=max(screen_shake_frames,4)
 		end,
 		update=function(self)
 			self.hitbox_channel=ternary(self.frames_alive==2,8,0)
@@ -819,6 +898,62 @@ local entity_classes={
 		end,
 		draw_shadow=noop,
 		on_hit=noop
+	},
+	boulder={
+		width=8,
+		height=6,
+		collision_channel=17, -- ground, boulders
+		platform_channel=16, -- boulders
+		hurtbox_channel=10, -- enemy bullets, explosions
+		gravity=0.2,
+		draw=function(self)
+			self:apply_lighting()
+			spr(12,self.x+0.5,-self.y-8)
+		end,
+		on_death=function(self)
+			local i
+			for i=-1,1 do
+				create_entity("rock",{x=self.x+2*i+2,y=self.y+2,vx=i/2})
+			end
+			for i=1,10 do
+				local rx=rnd_int(-4,4)
+				add_smoke(self:center_x()+rx,self:center_y()+rnd_int(-3,3),rx/10,0.3+rnd(0.2))
+			end
+		end,
+		on_hit=noop,
+		on_hurt=function(self,other)
+			if other.is_destructive then
+				self:die()
+			end
+		end
+	},
+	rock={
+		width=4,
+		height=4,
+		gravity=0.1,
+		vy=1.7,
+		hitbox_channel=64, -- falling rocks
+		collision_channel=29, -- ground, crates, barrels, boulders
+		init=function(self)
+			self.sprite=rnd_int(30,31)
+			self.flip_x=rnd()<0.5
+			self.flip_y=rnd()<0.5
+		end,
+		draw=function(self)
+			self:apply_lighting(self.flip_x,self.flip_y)
+			spr(self.sprite,self.x-1.5,-self.y-6,1,1,self.flip_x,self.flip_y)
+		end,
+		on_collide=function(self)
+			self:die()
+		end,
+		on_hit=noop,
+		on_death=function(self)
+			local i
+			for i=1,6 do
+				add_smoke(self:center_x()+rnd_int(-2,2),self:center_y()+rnd_int(-3,1),0,0.4)
+			end
+			screen_shake_frames=max(screen_shake_frames,2)
+		end
 	},
 	quicksand={
 		-- width=4n+2
@@ -852,7 +987,7 @@ local entity_classes={
 		height=4,
 		collision_channel=13, -- ground, crates, barrels
 		platform_channel=4, -- crates
-		hurtbox_channel=42, -- bullets, explosions, quicksand
+		hurtbox_channel=43, -- player swing, bullets, explosions, quicksand
 		gravity=0.2,
 		color_ramp=color_ramps.brown,
 		sprite=14,
@@ -861,7 +996,7 @@ local entity_classes={
 			spr(self.sprite,self.x-1.5,-self.y-8)
 		end,
 		on_hurt=function(self,other)
-			if other.is_destructive then
+			if other.is_destructive or other.class_name=="player" then
 				self:die()
 			end
 		end,
@@ -1135,6 +1270,7 @@ function _update()
 	-- call the update function of the current scene
 	if not will_skip_frame then
 		scene_frame=increment_counter(scene_frame)
+		screen_shake_frames=decrement_counter(screen_shake_frames)
 		scenes[scene][2]()
 	end
 end
@@ -1162,24 +1298,15 @@ end
 
 -- game functions
 function init_game()
-	-- reset everything
-	entities,new_entities,smoke,light_sources={},{},{},{}
-	slide_frames=0
-	wind=0
-	-- create initial entities
-	sky=create_entity("sky")
-	sun=create_entity("sun")
-	player=create_entity("player")
-	left_wall=create_entity("invisible_wall",{x=-3,y=-4,height=40})
-	right_wall=create_entity("invisible_wall",{x=125,y=-4,height=40})
-	-- create_entity("debug_cube",{x=60,y=5})
-	-- load the first level
-	load_level(1,0)
-	-- immediately add new entities to the game
-	add_new_entities()
+	reset_to_level(1)
+	-- player:pose()
 end
 
 function update_game()
+	if button_presses[5]<1 then
+		reset_to_level(level_num)
+		player:pose()
+	end
 	debug_num_steps=0
 	-- sort entities for updating
 	sort_list(entities,function(a,b)
@@ -1237,7 +1364,7 @@ function update_game()
 	end
 	if pause_frames<=0 then
 		-- update wind
-		wind=mid(-0.1,wind+rnd(0.05)-0.025,0.1)
+		wind=mid(-0.05,wind+rnd(0.05)-0.025,0.05)
 		-- update smoke
 		foreach(smoke,function(particle)
 			particle.vx+=wind
@@ -1262,7 +1389,12 @@ function update_game()
 end
 
 function draw_game()
-	camera(-1,-70)
+	local camera_x=-1
+	if screen_shake_frames>0 then
+		magnitude=mid(1,screen_shake_frames/2,3)
+		camera_x+=magnitude*(2*(scene_frame%2)-1)
+	end
+	camera(camera_x,-70)
 	-- draw the ground
 	rectfill(0,0,125,3,4)
 	-- draw each entity's shadow
@@ -1284,6 +1416,39 @@ function draw_game()
 	-- rectfill(-1,4,126,57) -- bottom
 	rectfill(-1,-70,126,-21) -- top
 	rect(-1,-21,126,4) -- edges
+end
+
+function create_initial_entities()
+	sky=create_entity("sky")
+	sun=create_entity("sun")
+	player=create_entity("player")
+	left_wall=create_entity("invisible_wall",{x=-3,y=-4,height=40})
+	right_wall=create_entity("invisible_wall",{x=125,y=-4,height=40})
+end
+
+function reset_game()
+	sky=nil
+	sun=nil
+	player=nil
+	left_wall=nil
+	right_wall=nil
+	slow_mo_frames=0
+	freeze_frames=0
+	pause_frames=0
+	slide_frames=0
+	screen_shake_frames=0
+	wind=0
+	entities={}
+	new_entities={}
+	smoke={}
+	light_sources={}
+end
+
+function reset_to_level(level_num)
+	reset_game()
+	create_initial_entities()
+	load_level(level_num,0)
+	add_new_entities()
 end
 
 function load_level(num,offset)
@@ -1363,11 +1528,11 @@ function create_entity(class_name,args,skip_init)
 					end
 				end
 			end,
-			draw_outline=function(self,color)
-				rect(self.x+0.5,-self.y-1,self.x+max(1,self.width)-0.5,-self.y-max(1,self.height),color)
+			draw_outline=function(self,color,height)
+				rect(self.x+0.5,-self.y-1,self.x+max(1,self.width)-0.5,-self.y-max(1,height or self.height),color)
 			end,
-			draw_shape=function(self,color)
-				rectfill(self.x+0.5,-self.y-1,self.x+max(1,self.width)-0.5,-self.y-max(1,self.height),color)
+			draw_shape=function(self,color,height)
+				rectfill(self.x+0.5,-self.y-1,self.x+max(1,self.width)-0.5,-self.y-max(1,height or self.height),color)
 			end,
 			apply_lighting=function(self,flip_x,flip_y)
 				local c
@@ -1486,6 +1651,12 @@ function create_entity(class_name,args,skip_init)
 			end,
 			on_stuck=noop,
 			on_collide=noop,
+			center_x=function(self)
+				return self.x+self.width/2
+			end,
+			center_y=function(self)
+				return self.y+self.height/2
+			end,
 			check_for_hits=function(self,other)
 				return is_overlapping(self,other)
 			end,
@@ -1548,6 +1719,16 @@ end
 
 
 -- helper functions
+function add_smoke(x,y,vx,vy)
+	add(smoke,{
+		x=x,
+		y=y,
+		vx=vx,
+		vy=vy,
+		frames_to_death=rnd_int(5,20)
+	})
+end
+
 function ceil(n)
 	return -flr(-n)
 end
@@ -1689,20 +1870,20 @@ scenes={
 
 __gfx__
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-000470000000000000004700000047000004b00000004b0000047000004700000000000000047000000470000800080008000800000000000000000000000000
-0081b0000004700000081b0000081b000081b00000081b000008b0000081b000000000000081b0000081b1110080800000808000000000000000000000856b00
-1111b0000081b00011111b0011111b001111b00011111b000081b0000081b0000000000000811000008110000008000000080000000000000000000000911a00
-008eb0001111b000008ef0000081f00000cee00000cef000008eb0000081f00004567000008eb100008eb00000808000008080000004700000856b000089ab00
-00c0f0000c11f0000800f00000cf00000c000f000c0f000000c0f00000080f0008111b0000c0f00000c0f00008000800080008000089ab000089ab000089ab00
-000000000000000000000000000000000000010000007770000000777000000000000000000000000000000000000000000000000089ab000089ab0000911a00
-00000000000000000000000000000000000017700177777770007777777000770000000000000000000000000000000000000000000cf0000089ab000089ab00
+000470000000000000004700000047000004b00000004b0000047000004700000000000000047000000470000800080000000000000000000000000000000000
+0081b0000004700000081b0000081b000081b00000081b000008b0000081b000000000000081b0000081b1110080800004556670000000000000000000856b00
+1111b0000081b00011111b0011111b001111b00011111b000081b0000081b0000000000000811000008110000008000004911a77000000000000000000911a00
+008eb0001111b000008ef0000081f00000cee00000cef000008eb0000081f00004567000008eb100008eb0000080800088911abb0004700000856b000089ab00
+00c0f0000c11f0000800f00000cf00000c000f000c0f000000c0f00000080f0008111b0000c0f00000c0f0000800080088911abb0089ab000089ab000089ab00
+00000000000000000000000000000000000001000000777000000077700000000000000000000000000000000000000088911abb0089ab000089ab0000911a00
+000000000000000000000000000000000000177001777777700077777770007700000000000000000000000000000000cc111ff0000cf0000089ab000089ab00
 00000000000000000000000000000000000177700017777770017777777000770000008800000000000000000000000000000000000000000000000000000000
-07000000000000000000000001110000007777770001777777070077777717700000008800000000000000000000000000000000000000000800080008000800
-77110000000700010000000000071100007777770700077777070000777707000000008800467000004670000046700004670000000000000080800000808000
-11000000000777010000000007777700007777770770007777000000000707000000008808111b0008111b0008111b008111b000000000000008000000080000
-0000000000007777100000077777700000777770007770077000000000000070000000880081b0000081b0000081b000081b0000000000000080800000808000
-0000000000007777100000777777700007777770000777007000077000000000000700880081b0000081b0000081b0000811b000004000000800080008000800
-000000000000007770000000777000000077700000000770000000777000000000700088008eb000008eb000008eb0000081b000041777000000000000000000
+07000000000000000000000001110000007777770001777777070077777717700000008800000000000000000000000000000000000000000000000000000000
+77110000000700010000000000071100007777770700077777070000777707000000008800467000004670000046700004670000000000000004670000047000
+11000000000777010000000007777700007777770770007777000000000707000000008808111b0008111b0008111b008111b000000000000089ab000089ab00
+0000000000007777100000077777700000777770007770077000000000000070000000880081b0000081b0000081b000081b0000000000000089ab000089ab00
+0000000000007777100000777777700007777770000777007000077000000000000700880081b0000081b0000081b0000811b00000400000000df0000089e000
+000000000000007770000000777000000077700000000770000000777000000000700088008eb000008eb000008eb0000081b000041777000000000000cd0000
 00000000000000000000000077700000007770000000770700000077700000007770008800c0f000000c00000c000f00000c0f00081111b00000000000000000
 01000000000000771000007777777000000777700007700770007700000000000000008800000000000000004455667700000000000000000000000000000000
 071000000000777100000007777770000007777000777077700070000000000000000088000000000000a0004455667700000000080008000800080008000800
@@ -1737,11 +1918,11 @@ __gfx__
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-08000800080008000080008000800080080008000800080008000800080008000800080008000800080008000800080008000800080008000000000000000000
-00808000008080000008080000080800008080000080800000808000008080000080800000808000008080000080800000808000008080000000000000000000
-00080000000800000000800000008000000800000008000000080000000800000008000000080000000800000008000000080000000800000ff4fff00004fff0
-00808000008080000008080000080800008080000080800000808000008080000080800000808000008080000080800000808000008080000000000000000000
-08000800080008000080008000800080080008000800080008000800080008000800080008000800080008000800080008000800080008000000000000000000
+08000800080008000080008000800080080008000800080008000800080008000800080008000800080008000000000000000000000000000000000000000000
+00808000008080000008080000080800008080000080800000808000008080000080800000808000008080000000000000000000000000000000000000000000
+00080000000800000000800000008000000800000008000000080000000800000008000000080000000800000000000000000000000000000ff4fff00004fff0
+0080800000808000000808000008080000808000008080000080800000808000008080000080800000808000aa0a0000a0aa0a000a000a000000000000000000
+08000800080008000080008000800080080008000800080008000800080008000800080008000800080008000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
