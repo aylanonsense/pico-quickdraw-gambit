@@ -5,16 +5,22 @@ __lua__
 
 quickdraw gambit?
 
-need to despawn most things from one level when entering another (barrels that roll off screen...)
-need to come up with another way to create a scrolling background
-need to just make everything way more efficient
+todo: despawn most things from one level when entering another (barrels that roll off screen...)
+todo: come up with another way to create a scrolling background
+todo: just make everything way more efficient
 too much screenshake?
 barrels should break on hit?
 cannonballs break boulders...?
+bugs: barrels can be hit multiple times by the same slash
+todo: sky and sun shouldn't be proper entities
+todo: background entities shouldn't be proper entities
 
 hazards so far:
+	crates
+	barrels
+	explosive barrels
 	bullets
-	quickshot
+	quickshots
 	cannonballs
 	dynamite
 	rolling barrels
@@ -23,12 +29,13 @@ hazards so far:
 	boulders
 
 hazards to build:
-	lasso
-	(multi hit obstacles)
-	(jump pads)
-	(boomerangs)
-	(sandstorm/wind)
-	(bow & arrow)
+	lasso?
+	fire?
+	multi hit obstacle?
+	jump pads?
+	boomerangs?
+	sandstorm/wind?
+	bow & arrow?
 
 collision_channels:
 	1: ground
@@ -61,59 +68,61 @@ update priority:
  6: player
 
 axis:
-      +y (up)
-       |
-  -x --+-- +x (right)
-(left) |
-      -y (down)
+       +y (up)
+        |
+   -x --+-- +x (right)
+ (left) |
+       -y (down)
 
-how pixels should be drawn:
-  [-0.5,0.5)
-       |
-       v
-     +---+---+
-     |   |   | <- (0,1]
-     +---+---+
-     |   |   | <- (-1,0]
-     +---+---+
-           ^
-           |
-       [0.5,1.5)
+sub-pixel divisions:
+  x=[-0.5,0.5)
+        |
+        v
+      +---+---+
+      |   |   | <- y=(0,1]
+      +---+---+
+      |   |   | <- y=(-1,0]
+      +---+---+
+            ^
+            |
+       x=[0.5,1.5)
 
 ]]
 
+function noop() end
+
+-- global debug vars
 local debug_skip_amt=1
-local debug_num_steps=0
-
 local quick_mode=false -- false: will pose on screen transition
+local skip_frames=0
 
--- global vars
+-- global entity vars
+local entities
+local new_entities
 local player
 local sun
 local sky
 local left_wall
 local right_wall
+
+-- global scene vars
+local scenes={}
 local scene
 local level_num
 local scene_frame
-local slow_mo_frames
 local freeze_frames
 local pause_frames
 local slide_frames
 local screen_shake_frames
-local skip_frames=0
-local entities
-local new_entities
+
+-- global effects vars
 local smoke
 local light_sources
-local wind
-local buttons={}
-local button_presses={}
-function noop() end
 
+-- global input vars
+local buttons,button_presses={},{}
 
--- constants
-local ground={vx=0,vy=0}
+-- global constants
 local directions={"left","right","bottom","top"}
 local dir_lookup={
 	-- axis,size,increment
@@ -122,13 +131,15 @@ local dir_lookup={
 	bottom={"y","height",-1},
 	top={"y","height",1}
 }
-local scenes={}
 local color_ramps={
-	debug={1,5,13,6,7},
+	-- darkest-->lightest
 	red={1,2,8,8,14},
 	grey={1,5,13,6,7},
 	brown={1,2,4,4,15}
 }
+
+
+-- levels
 local levels={
 	-- class_name,args,...
 	{
@@ -269,6 +280,8 @@ local levels={
 	-- 	-- "rolling_barrel",{x=35,y=3,vx=1}
 	-- }
 }
+
+-- entity classes
 local entity_classes={
 	person={
 		-- spatial props
@@ -291,7 +304,7 @@ local entity_classes={
 		bleed=function(self)
 			decrement_counter_prop(self,"bleed_frames")
 			if self.bleed_frames>0 then
-				local ang=self.bleed_frames/40+0.05-rnd(0.12)
+				local ang=self.bleed_frames/40+rnd_float(-0.07,0.05)
 				create_entity("blood",{
 					x=self.x+1,
 					y=self.y+3,
@@ -321,7 +334,7 @@ local entity_classes={
 				self.facing=-1
 			elseif other.vx<0 then
 				self.facing=1
-			elseif other.x+other.width/2<self.x+self.width/2 then
+			elseif other:center_x()<self:center_x() then
 				self.facing=-1
 			else
 				self.facing=1
@@ -455,7 +468,7 @@ local entity_classes={
 		end,
 		check_for_hits=function(self,other)
 			return
-				self.slash_frames>=3 and
+				self.slash_frames>=5 and
 				self.slash_frames<=7 and
 				rects_overlapping(
 					self.x-ternary(self.facing<0,7,0),self.y-3,10,10,
@@ -734,16 +747,13 @@ local entity_classes={
 			spr(113+flr(self.frames_alive/2)%8,self.x-2.5,-self.y-6,1,1,false)
 		end,
 		on_death=function(self)
-			create_entity("explosion",{x=self.x+self.width/2-6,y=self.y})
+			create_entity("explosion",{x=self:center_x()-6,y=self.y})
 		end,
 		on_hurt=function(self,other)
-			self.vy=1
-			self.vx=other.facing*(0.3+rnd(0.5))
+			self.vx,self.vy=other.facing*rnd_float(0.3,0.8),1
 		end,
 		on_hit=function(self,other)
-			self.vy=0.2
-			self.vx=other.vx+other.facing/5
-			self.hitbox_channel=0
+			self.vy,self.vx,self.hitbox_channel=0.2,other.vx+other.facing/5,0
 			return false
 		end,
 		on_collide=function(self)
@@ -856,24 +866,10 @@ local entity_classes={
 			spr(43-ceil(self.frames_to_death/2),self.x-ternary(self.facing<0,7,0),-self.y-5,1,1,self.facing<0)
 		end
 	},
-	debug_cube={
-		width=8,
-		height=8,
-		update=function(self)
-			self.vx=(ternary(buttons[1],1,0)-ternary(buttons[0],1,0))/0.97
-			self.vy=(ternary(buttons[2],1,0)-ternary(buttons[3],1,0))/0.97
-			self:apply_velocity()
-		end,
-		draw=function(self)
-			self:apply_lighting()
-			spr(43,self.x+0.5,-self.y-8)
-		end
-	},
 	explosion={
 		width=12,
 		height=7,
 		sprite_height=15,
-		-- hitbox_channel=8, -- explosions
 		frames_to_death=15,
 		is_light_source=true,
 		intensity=4,
@@ -917,7 +913,7 @@ local entity_classes={
 			end
 			for i=1,10 do
 				local rx=rnd_int(-4,4)
-				add_smoke(self:center_x()+rx,self:center_y()+rnd_int(-3,3),rx/10,0.3+rnd(0.2))
+				add_smoke(self:center_x()+rx,self:center_y()+rnd_int(-3,3),rx/10,rnd_float(0.3,0.5))
 			end
 		end,
 		on_hit=noop,
@@ -1001,8 +997,8 @@ local entity_classes={
 			end
 		end,
 		on_death=function(self)
-			create_entity("plank",{x=self.x,y=self.y})
-			create_entity("plank",{x=self.x,y=self.y})
+			create_entity("plank",clone_props(self,{"x","y"}))
+			create_entity("plank",clone_props(self,{"x","y"}))
 		end
 	},
 	barrel={
@@ -1043,7 +1039,7 @@ local entity_classes={
 		end,
 		on_death=function(self)
 			self:super_on_death()
-			create_entity("barrel_ring",{x=self.x,y=self.y})
+			create_entity("barrel_ring",clone_props(self,{"x","y"}))
 		end
 	},
 	plank={
@@ -1051,8 +1047,8 @@ local entity_classes={
 		height=3,
 		gravity=0.1,
 		init=function(self)
-			self.vx=rnd(0.8)-0.4
-			self.vy=0.9+rnd(0.7)
+			self.vx=rnd_float(-0.4,0.4)
+			self.vy=rnd_float(0.9,1.6)
 			self.rot_speed=rnd_int(1,2)
 		end,
 		update=function(self)
@@ -1084,9 +1080,8 @@ local entity_classes={
 		width=4,
 		vy=1,
 		collision_channel=5, -- ground, crates
-		bounce_x=1,
 		color_ramp=color_ramps.brown,
-		hurtlock_frames=5,
+		invincibility_frames=5,
 		hitbox_channel=16, -- rolling barrels
 		hurtbox_channel=59, -- player swing, bullets, rolling barrels, explosions, quicksand
 		large_bounce_vy=1,
@@ -1126,6 +1121,7 @@ local entity_classes={
 				self.vy=self.small_bounce_vy
 			elseif dir=="left" or dir=="right" then
 				self.vy=self.large_bounce_vy
+				self.vx*=-1
 			end
 		end,
 		bounce_off=function(self,other)
@@ -1135,16 +1131,17 @@ local entity_classes={
 			elseif other.x>self.x then
 				self.vx=-1
 			end
-			self.hurtlock_frames=max(self.hurtlock_frames,2)
+			self.invincibility_frames=max(self.invincibility_frames,2)
 		end,
 		draw=function(self)
 			self:apply_lighting()
 			spr(13,self.x-1.5,-self.y-8)
 		end,
 		on_death=function(self)
-			create_entity("plank",{x=self.x,y=self.y})
-			create_entity("plank",{x=self.x,y=self.y})
-			create_entity("barrel_ring",{x=self.x,y=self.y})
+			local props=clone_props(self,{"x","y"})
+			create_entity("plank",props)
+			create_entity("plank",props)
+			create_entity("barrel_ring",props)
 		end
 	},
 	background_entity={
@@ -1230,47 +1227,27 @@ local entity_classes={
 
 -- main functions
 function _init()
-	local i
-	for i=0,5 do
-		buttons[i]=false
-		button_presses[i]=99
-	end
 	init_scene("game")
 end
 
 function _update()
 	-- skip frames
-	local will_skip_frame=false
+	local will_skip_frame,i=false -- ,nil
 	skip_frames=increment_counter(skip_frames)
 	if skip_frames%debug_skip_amt>0 then
 		will_skip_frame=true
 	-- freeze frames
 	elseif freeze_frames>0 then
-		freeze_frames=decrement_counter(freeze_frames)
-		will_skip_frame=true
-	-- pause/slow-mo frames
-	else
-		pause_frames=decrement_counter(pause_frames)
-		if slow_mo_frames>0 then
-			slow_mo_frames=decrement_counter(slow_mo_frames)
-			will_skip_frame=(slow_mo_frames%4>0)
-		end
+		freeze_frames,will_skip_frame=decrement_counter(freeze_frames),true
 	end
 	-- keep track of inputs (because btnp repeats presses)
-	-- todo change buttons[] to button_presses[] which works a little better
-	local i
 	for i=0,5 do
-		if btn(i) and not buttons[i] then
-			button_presses[i]=0
-		elseif not will_skip_frame then
-			increment_counter_prop(button_presses,i)
-		end
-		buttons[i]=btn(i)
+		button_presses[i],buttons[i]=btn(i) and not buttons[i],btn(i)
 	end
-	-- call the update function of the current scene
 	if not will_skip_frame then
-		scene_frame=increment_counter(scene_frame)
-		screen_shake_frames=decrement_counter(screen_shake_frames)
+		-- decrement a bunch of counters
+		scene_frame,pause_frames,screen_shake_frames=increment_counter(scene_frame),decrement_counter(pause_frames),decrement_counter(screen_shake_frames)
+		-- call the update function of the current scene
 		scenes[scene][2]()
 	end
 end
@@ -1279,17 +1256,10 @@ function _draw()
 	-- reset the canvas
 	camera()
 	rectfill(0,0,127,127,0)
-	-- draw guidelines
-	-- color(1)
-	-- rect(0,0,63,63)
-	-- rect(66,0,127,63)
-	-- rect(0,66,63,127)
-	-- rect(66,66,127,127)
 	-- call the draw function of the current scene
 	scenes[scene][3]()
 	-- draw debug info
 	camera()
-	print("steps:    "..debug_num_steps,2,100,ternary(debug_num_steps>=50,2,1))
 	print("mem:      "..flr(100*(stat(0)/1024)).."%",2,107,ternary(stat(1)>=1024,2,1))
 	print("cpu:      "..flr(100*stat(1)).."%",2,114,ternary(stat(1)>=1,2,1))
 	print("entities: "..#entities,2,121,ternary(#entities>50,2,1))
@@ -1299,21 +1269,19 @@ end
 -- game functions
 function init_game()
 	reset_to_level(1)
-	-- player:pose()
 end
 
 function update_game()
-	if button_presses[5]<1 then
+	-- reset the level when x is pressed
+	if button_presses[5] then
 		reset_to_level(level_num)
-		player:pose()
 	end
-	debug_num_steps=0
 	-- sort entities for updating
 	sort_list(entities,function(a,b)
 		return a.update_priority>b.update_priority
 	end)
 	-- slide entities
-	local entity
+	local entity,entity2
 	slide_frames=decrement_counter(slide_frames)
 	if slide_frames>0 then
 		for entity in all(entities) do
@@ -1323,55 +1291,37 @@ function update_game()
 	-- update entities
 	for entity in all(entities) do
 		if (pause_frames<=0 or entity.is_pause_immune) and (slide_frames<=0 or entity.is_slide_pause_immune) then
-			decrement_counter_prop(entity,"stasis_frames")
-			if entity.stasis_frames<=0 then
-				-- call the entity's update function
-				entity:update()
-				-- do some default update stuff
-				decrement_counter_prop(entity,"hurtlock_frames")
-				increment_counter_prop(entity,"frames_alive")
-				if decrement_counter_prop(entity,"frames_to_death") then
-					entity:die()
-				end
-				-- 10 px out of bounds to the left
-				-- 150px out of bounds to the right
-				if entity.x+entity.width<-10 or entity.x>276 then
-					entity:despawn()
-				end
+			-- call the entity's update function
+			entity:update()
+			-- do some default update stuff
+			decrement_counter_prop(entity,"invincibility_frames")
+			increment_counter_prop(entity,"frames_alive")
+			if decrement_counter_prop(entity,"frames_to_death") then
+				entity:die()
 			end
-		end
-	end
-	-- call each entity's post_update function
-	for entity in all(entities) do
-		if (pause_frames<=0 or entity.is_pause_immune) and (slide_frames<=0 or entity.is_slide_pause_immune) then
-			entity:post_update()
+			-- 10 px out of bounds to the left
+			-- 150px out of bounds to the right
+			if entity.x+entity.width<-10 or entity.x>276 then
+				entity:despawn()
+			end
 		end
 	end
 	-- check for hits
-	local entity2
 	for entity in all(entities) do
 		for entity2 in all(entities) do
-			if (pause_frames<=0 or (entity.is_pause_immune and entity2.is_pause_immune)) and (slide_frames<=0 or (entity.is_slide_pause_immune and entity2.is_slide_pause_immune)) then
-				if entity!=entity2 and band(entity.hitbox_channel,entity2.hurtbox_channel)>0 and entity2.hurtlock_frames<=0 then
-					if entity:check_for_hits(entity2) then
-						if entity:on_hit(entity2)!=false then
-							entity2:on_hurt(entity)
-						end
-					end
-				end
+			if (pause_frames<=0 or (entity.is_pause_immune and entity2.is_pause_immune)) and (slide_frames<=0 or (entity.is_slide_pause_immune and entity2.is_slide_pause_immune)) and entity!=entity2 and band(entity.hitbox_channel,entity2.hurtbox_channel)>0 and entity2.invincibility_frames<=0 and entity:check_for_hits(entity2) and entity:on_hit(entity2)!=false then
+				entity2:on_hurt(entity)
 			end
 		end
 	end
+	-- update smoke
 	if pause_frames<=0 then
-		-- update wind
-		wind=mid(-0.05,wind+rnd(0.05)-0.025,0.05)
-		-- update smoke
 		foreach(smoke,function(particle)
-			particle.vx+=wind
+			particle.vx-=0.03 -- todo might not be the right amount
 			particle.vx*=0.98
 			particle.x+=particle.vx
 			particle.y+=particle.vy
-			particle.frames_to_death-=1
+			decrement_counter_prop(particle,"frames_to_death")
 		end)
 		filter_list(smoke,function(particle)
 			return particle.frames_to_death>0
@@ -1418,59 +1368,38 @@ function draw_game()
 	rect(-1,-21,126,4) -- edges
 end
 
-function create_initial_entities()
-	sky=create_entity("sky")
-	sun=create_entity("sun")
-	player=create_entity("player")
-	left_wall=create_entity("invisible_wall",{x=-3,y=-4,height=40})
-	right_wall=create_entity("invisible_wall",{x=125,y=-4,height=40})
-end
-
-function reset_game()
-	sky=nil
-	sun=nil
-	player=nil
-	left_wall=nil
-	right_wall=nil
-	slow_mo_frames=0
-	freeze_frames=0
-	pause_frames=0
-	slide_frames=0
-	screen_shake_frames=0
-	wind=0
-	entities={}
-	new_entities={}
-	smoke={}
-	light_sources={}
+function reset_frame_stuff()
+	freeze_frames,pause_frames,slide_frames,screen_shake_frames=0,0,0,0
 end
 
 function reset_to_level(level_num)
-	reset_game()
-	create_initial_entities()
+	-- reset vars
+	reset_frame_stuff()
+	entities,new_entities,smoke,light_sources,sky,sun,player,left_wall,right_wall={},{},{},{} -- ,nil...
+	-- create initial entities
+	player,sky,sun,left_wall,right_wall=create_entity("player"),create_entity("sky"),create_entity("sun"),create_entity("invisible_wall",{x=-3,y=-4,height=40}),create_entity("invisible_wall",{x=125,y=-4,height=40})
+	-- load the level
 	load_level(level_num,0)
 	add_new_entities()
+	player:pose()
 end
 
 function load_level(num,offset)
 	level_num=num
-	local level=levels[level_num]
-	local i
+	local level,i=levels[level_num] -- ,nil
 	for i=1,#level,2 do
-		local entity=create_entity(level[i],level[i+1],true)
-		entity.x+=offset
-		init_entity(entity,level[i+1])
+		create_entity(level[i],level[i+1],offset)
 	end
 end
 
 
 -- entity functions
-function create_entity(class_name,args,skip_init)
-	local super_class_name,entity,k,v=entity_classes[class_name].extends
+function create_entity(class_name,args,offset,skip_init)
+	local super_class_name,entity,k,v=entity_classes[class_name].extends -- ,nil...
 	-- this entity might extend another
 	if super_class_name then
-		entity=create_entity(super_class_name,args,true)
-		entity.super_class_name=super_class_name
-		entity.class_name=class_name
+		entity=create_entity(super_class_name,args,0,true)
+		entity.super_class_name,entity.class_name=super_class_name,class_name
 	-- if not, create a default entity
 	else
 		entity={
@@ -1486,7 +1415,6 @@ function create_entity(class_name,args,skip_init)
 			is_slide_pause_immune=true, -- todo
 			slide_rate=3,
 			gravity=0,
-			stasis_frames=0,
 			-- spatial props
 			x=0,
 			y=0,
@@ -1495,41 +1423,29 @@ function create_entity(class_name,args,skip_init)
 			vx=0,
 			vy=0,
 			-- collision props
-			bounce_x=0,
-			bounce_y=0,
 			platform_channel=0,
 			collision_channel=0,
 			-- hit props
 			hitbox_channel=0,
 			hurtbox_channel=0,
-			hurtlock_frames=0,
+			invincibility_frames=0,
 			-- entity methods
 			init=noop,
 			add_to_game=noop,
 			update=function(self)
 				self:apply_velocity()
 			end,
-			post_update=noop,
 			draw=function(self)
-				self:draw_shape(1)
+				self:draw_shape(8)
 			end,
 			draw_shadow=function(self)
-				local slope=(self.x-62)/(16+sun.y)
-				local y
-				local left=self.x+0.5
-				local right=self.x+self.width-0.5
-				local bottom=self.y
-				local top=self.y+self.height
+				local slope,y=(self.x-62)/(16+sun.y) -- ,nil
 				for y=0,3 do
-					local shadow_left=max(0,left+slope*y+ternary(slope<0 and self.height>1,slope,0))
-					local shadow_right=min(right+slope*y+ternary(slope>0 and self.height>1,slope,0),125)
-					if bottom<=y and top>y and shadow_left<shadow_right then
+					local shadow_left,shadow_right=max(0,self.x+0.5+slope*y+ternary(slope<0 and self.height>1,slope,0)),min(self.x+self.width-0.5+slope*y+ternary(slope>0 and self.height>1,slope,0),125)
+					if self.y<=y and self.y+self.height>y and shadow_left<shadow_right then
 						line(shadow_left,y,shadow_right,y,2)
 					end
 				end
-			end,
-			draw_outline=function(self,color,height)
-				rect(self.x+0.5,-self.y-1,self.x+max(1,self.width)-0.5,-self.y-max(1,height or self.height),color)
 			end,
 			draw_shape=function(self,color,height)
 				rectfill(self.x+0.5,-self.y-1,self.x+max(1,self.width)-0.5,-self.y-max(1,height or self.height),color)
@@ -1544,19 +1460,18 @@ function create_entity(class_name,args,skip_init)
 				end
 				-- every other color is lit based on the angle and distance to light sources
 				for c=4,15 do
-					local surface_x=({-2,-0.2,0.2,2})[1+c%4]*ternary(flip_x,-1,1)
-					local surface_y=({1,0,-1})[flr(c/4)]*ternary(flip_y,-1,1)
-					surface_x,surface_y=normalize(surface_x,surface_y)
-					local surface_penalty=ternary(c==9 or c==10,1,0)
-					local color_index=1
-					local ramp=self.color_ramp
+					local surface_x,surface_y,color_index,ramp=({0.9,0.2,-0.2,-0.9})[1+c%4]*to_sign(flip_x),({-0.95,0,0.95})[flr(c/4)]*to_sign(flip_y),1,self.color_ramp
+					if surface_y==0 then
+						surface_x=to_sign(surface_x>0)
+					elseif c%4==0 or c%4==3 then
+						surface_y*=0.5
+					end
 					for light_source in all(light_sources) do
-						local dx=mid(-100,light_source.x+light_source.width/2-self.x-self.width/2,100)
-						local dy=mid(-100,light_source.y+light_source.height/2-self.y-self.height/2,100)
-						local square_dist=dx*dx+dy*dy -- between 0 and 20000
-						local dist=sqrt(square_dist) -- between 0 and ~142
-						local dx_norm=dx/dist
-						local dy_norm=dy/dist
+						local dx=mid(-100,light_source:center_x()-self:center_x(),100)
+						local dy=mid(-100,light_source:center_y()-self:center_y(),100)
+						local dist=sqrt(dx*dx+dy*dy) -- between 0 and ~142
+						local dx_norm,dy_norm=dx/dist,dy/dist
+						-- todo optimize below
 						local max_color_index=light_source.intensity+0.7
 						local min_range=ternary(light_source.min_range,light_source.min_range,0)
 						local dot=surface_x*dx_norm+surface_y*dy_norm
@@ -1565,7 +1480,7 @@ function create_entity(class_name,args,skip_init)
 						elseif light_source.max_range then
 							max_color_index*=1-mid(0,(dist-min_range)/(light_source.max_range-min_range),1)
 						end
-						local new_color_index=mid(1,flr(max_color_index*dot)-surface_penalty,5)
+						local new_color_index=mid(1,flr(max_color_index*dot)-ternary(c==9 or c==10,1,0),5)
 						if new_color_index>=color_index then
 							color_index=new_color_index
 							ramp=ternary(light_source.light_ramp,light_source.light_ramp,self.color_ramp)
@@ -1588,13 +1503,15 @@ function create_entity(class_name,args,skip_init)
 				self.x-=self.slide_rate
 			end,
 			apply_velocity=function(self)
+				-- getting stuck in quicksand denies all movement
 				if self.is_stuck_in_quicksand then
-					self.vx=0
-					self.vy=0
+					self.vx,self.vy=0,0
 					self.y-=0.05
 					if self.y+self.height<=0 then
 						self:despawn()
 					end
+				-- otherwise we have a lot of work to do
+				-- todo clean up the stuff below this
 				else
 					self.vy-=self.gravity
 					local vx,vy=self.vx,self.vy
@@ -1604,7 +1521,6 @@ function create_entity(class_name,args,skip_init)
 					elseif vx!=0 or vy!=0 then
 						local move_steps,t,entity,dir=ceil(max(abs(vx),abs(vy))/1.05)
 						for t=1,move_steps do
-							debug_num_steps+=1
 							if vx==self.vx then
 								self.x+=vx/move_steps
 							end
@@ -1631,21 +1547,17 @@ function create_entity(class_name,args,skip_init)
 					end
 					-- check for collisions against the ground
 					if self.y<0 and self.vy<0 and band(self.collision_channel,1)>0 then
-						self.y=0
-						self.vy=-self.vy*self.bounce_y
-						self:on_collide("bottom",ground)
+						self.y,self.vy=0,0
+						self:on_collide("bottom",{vx=0,vy=0})
 					end
 				end
 			end,
 			check_for_collision=function(self,platform,dir)
-				local axis=dir_lookup[dir][1] -- e.g. "x"
-				local size=dir_lookup[dir][2] -- e.g. "width"
+				local dir_props=dir_lookup[dir]
+				local axis,size,mult=dir_props[1],dir_props[2],dir_props[3] -- e.g. "x", "width", 1
 				local vel="v"..axis -- e.g. "vx"
-				local bounce="bounce_"..axis -- e.g. "bounce_x"
-				local mult=dir_lookup[dir][3] -- e.g. 1
 				if band(self.collision_channel,platform.platform_channel)>0 and self!=platform and mult*self[vel]>=mult*platform[vel] and is_overlapping_dir(self,platform,dir) then
-					self[axis]=platform[axis]+ternary(mult<0,platform[size],-self[size])
-					self[vel]=(platform[vel]-self[vel])*self[bounce]+platform[vel]
+					self[axis],self[vel]=platform[axis]+ternary(mult<0,platform[size],-self[size]),platform[vel]
 					self:on_collide(dir,platform)
 				end
 			end,
@@ -1658,7 +1570,9 @@ function create_entity(class_name,args,skip_init)
 				return self.y+self.height/2
 			end,
 			check_for_hits=function(self,other)
-				return is_overlapping(self,other)
+				return rects_overlapping(
+					self.x,self.y,self.width,self.height,
+					other.x,other.y,other.width,other.height)
 			end,
 			on_hurt=function(self)
 				self:die()
@@ -1679,18 +1593,13 @@ function create_entity(class_name,args,skip_init)
 	for k,v in pairs(args or {}) do
 		entity[k]=v
 	end
+	entity.x+=(offset or 0)
 	if not skip_init then
-		init_entity(entity,args)
+		entity:init(args)
+		add(new_entities,entity)
 	end
 	-- return it
 	return entity
-end
-
-function init_entity(entity,args)
-	-- initialize it
-	entity:init(args or {})
-	-- add it to the list of entities-to-be-added
-	add(new_entities,entity)
 end
 
 function add_new_entities()
@@ -1713,12 +1622,21 @@ end
 
 -- scene functions
 function init_scene(s)
-	scene,scene_frame,slow_mo_frames,freeze_frames,pause_frames=s,0,0,0,0
+	scene,scene_frame=s,0
+	reset_frame_stuff()
 	scenes[scene][1]()
 end
 
 
 -- helper functions
+function clone_props(obj,params)
+	local clone,k={} -- nil
+	for k in all(params) do
+		clone[k]=obj[k]
+	end
+	return clone
+end
+
 function add_smoke(x,y,vx,vy)
 	add(smoke,{
 		x=x,
@@ -1738,42 +1656,24 @@ function ternary(condition,if_true,if_false)
 	return condition and if_true or if_false
 end
 
--- gets the character in string s at position n
-function char_at(s,n)
-	return sub(s,n,n)
-end
-
--- gets the first position of character c in string s
-function char_index(s,c)
-	local i
-	for i=1,#s do
-		if char_at(s,i)==c then
-			return i
-		end
-	end
-end
-
 -- generates a random integer between min_val and max_val, inclusive
 function rnd_int(min_val,max_val)
-	return flr(min_val+rnd(1+max_val-min_val))
+	return flr(rnd_float(min_val,max_val+1))
 end
 
-function normalize(x,y)
-	local len=sqrt(x*x+y*y)
-	return x/len,y/len
+-- generates a random number between min_val and max_val
+function rnd_float(min_val,max_val)
+	return min_val+rnd(max_val-min_val)
 end
 
--- if n is below min, wrap to max. if n is above max, wrap to min
-function wrap(min_val,n,max_val)
-	return ternary(n<min_val,max_val,ternary(n>max_val,min_val,n))
+-- returns 1 if condition is true, -1 otherwise
+function to_sign(condition)
+	return ternary(condition,1,-1)
 end
 
 -- increment a counter, wrapping to 20000 if it risks overflowing
 function increment_counter(n)
-	if n>32000 then
-		return 20000
-	end
-	return n+1
+	return ternary(n>32000,20000,n+1)
 end
 
 -- increment_counter on a property on an object
@@ -1795,14 +1695,6 @@ function decrement_counter_prop(obj,k)
 	return false
 end
 
--- washes all non-black colors to c
-function colorwash(c)
-	local i
-	for i=1,15 do
-		pal(i,c)
-	end
-end
-
 -- sorts list (inefficiently) based on func
 function sort_list(list,func)
 	local i
@@ -1817,7 +1709,7 @@ end
 
 -- filters list to contain only entries where func is truthy
 function filter_list(list,func)
-	local num_deleted,i=0
+	local num_deleted,i=0 -- ,nil
 	for i=1,#list do
 		if not func(list[i]) then
 			list[i]=nil
@@ -1830,28 +1722,15 @@ end
 
 
 -- hit detection functions
-function is_overlapping(a,b)
-	if not a or not b then
-		return false
-	end
-	return rects_overlapping(
-		a.x,a.y,a.width,a.height,
-		b.x,b.y,b.width,b.height)
-end
-
 function is_overlapping_dir(a,b,dir)
-	if not a or not b then
-		return false
-	end
-	local a_sub={
+	local dir_props,a_sub=dir_lookup[dir],{
 		x=a.x+1.1,
 		y=a.y+1.1,
 		width=a.width-2.2,
 		height=a.height-2.2
 	}
-	local axis,size=dir_lookup[dir][1],dir_lookup[dir][2]
-	a_sub[axis]=a[axis]+ternary(dir_lookup[dir][3]>0,a[size]/2,0)
-	a_sub[size]=a[size]/2
+	local axis,size=dir_props[1],dir_props[2]
+	a_sub[axis],a_sub[size]=a[axis]+ternary(dir_props[3]>0,a[size]/2,0),a[size]/2
  	return rects_overlapping(
  		a_sub.x,a_sub.y,a_sub.width,a_sub.height,
  		b.x,b.y,b.width,b.height)
@@ -1861,6 +1740,7 @@ end
 function rects_overlapping(x1,y1,w1,h1,x2,y2,w2,h2)
 	return x1+w1>x2 and x2+w2>x1 and y1+h1>y2 and y2+h2>y1
 end
+
 
 -- set up the scenes now that the functions are defined
 scenes={
