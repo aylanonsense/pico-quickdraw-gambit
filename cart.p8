@@ -9,13 +9,12 @@ todo: intro
 todo: score screen
 todo: worlds?
 todo: despawn most things from one level when entering another (barrels that roll off screen...)
-todo: just make everything way more efficient
 todo: barrels should break on hit?
 todo: cannonballs break boulders...?
 todo: barrels can be hit multiple times by the same slash
 todo: get that sun displaying again
 todo: global on below ground --> self:die?
-
+todo: rolling barrels are glitchy
 
 collision interactions (the expensive ones):
 	player		-->	ground
@@ -32,15 +31,15 @@ collision interactions (the expensive ones):
 	dynamite	-->	barrels
 	dynamite	-->	boulders
 	blood		-->	ground
-	boulder		-->	ground
-	boulder		--> boulders
+	boulder		-->	ground (enable_physics)
+	boulder		--> boulders (enable_physics)
 	rock		-->	ground
 	rock		-->	crates
 	rock		-->	barrels
 	rock		-->	boulders
-	crate		-->	ground
-	crate		-->	crates
-	crate		-->	barrels
+	crate		-->	ground (enable_physics)
+	crate		-->	crates (enable_physics)
+	crate		-->	barrels (enable_physics)
 	barrel		-->	ground
 	barrel		-->	crates
 	barrel		-->	barrels
@@ -126,7 +125,7 @@ cannonball			todo
 quickshot			todo
 dynamite			todo
 twinkle				~looks good~
-blood				refactor to be like smoke
+blood				refactor to be like 
 name_tag			todo
 name_tag_slash		todo
 muzzle_flash		todo
@@ -170,7 +169,7 @@ local slide_frames
 local screen_shake_frames
 
 -- global effects vars
-local smoke
+local particles
 local light_sources
 
 -- global input vars
@@ -200,25 +199,40 @@ local levels={
 			name="outlaw 1",
 			weapon="gun",
 			behavior=function(self)
-				-- if self.frames_alive%80==2 then
-				-- 	self:jump(0,4)
-				-- elseif self.frames_alive%80==10 then
-				-- 	self:shoot({is_quickshot=true})
-				-- end
+				if self.frames_alive%80==10 then
+					self:shoot({is_quickshot=true})
+				end
 			end
 		},
-		"boulder",20,false,
-		"boulder",30,false,
-		"boulder",40,false,
-		"boulder",50,false,
-		"boulder",60,false,
-		"boulder",70,false,
-		"boulder",80,false,
-		"boulder",90,false,
-		"boulder",100,false,
-		"boulder",35,{y=10},
-		"boulder",45,{y=10},
-		"boulder",55,{y=10},
+		-- "boulder",20,false,
+		-- "boulder",30,false,
+		-- "boulder",40,false,
+		-- "boulder",50,false,
+		-- "boulder",60,false,
+		-- "boulder",70,false,
+		-- "boulder",80,false,
+		-- "boulder",90,false,
+		-- "boulder",100,false,
+		-- "boulder",35,{y=10,enable_physics=true},
+		-- "boulder",45,{y=10,enable_physics=true},
+		-- "boulder",55,{y=10,enable_physics=true},
+		-- "crate",30,false,
+		-- "crate",35,false,
+		-- "crate",40,false,
+		-- "crate",45,false,
+		-- "crate",50,false,
+		-- "crate",55,false,
+		-- "crate",60,false,
+		-- "crate",70,false,
+		-- "crate",75,false,
+		-- "crate",80,false,
+		-- "crate",42,{y=4,enable_physics=true},
+		-- "crate",47,{y=4,enable_physics=true},
+		-- "crate",52,{y=4,enable_physics=true},
+		-- "crate",62,{y=4,enable_physics=true},
+		-- "crate",72,{y=4,enable_physics=true},
+		-- "crate",59,{y=8,enable_physics=true},
+		-- "crate",64,{y=8,enable_physics=true},
 	},
 	{
 		{
@@ -383,10 +397,7 @@ local entity_classes={
 			decrement_counter_prop(self,"bleed_frames")
 			if self.bleed_frames>0 then
 				local ang=self.bleed_frames/40+rnd_float(-0.07,0.05)
-				create_entity("blood",self.x+1,self.y+3,{
-					vx=self.vx/2-self.facing*sin(ang),
-					vy=self.vy/2+0.75*cos(ang)
-				})
+				add_particle("blood",self.x+1,self.y+3,self.vx/2-self.facing*sin(ang),self.vy/2+0.75*cos(ang))
 			end
 		end,
 		on_collide=function(self,dir,platform)
@@ -769,7 +780,8 @@ local entity_classes={
 			self.vy-=0.07
 			local f=flr(self.frames_alive/4)
 			if self.y>5 then
-				add_smoke(
+				add_particle(
+					"smoke",
 					self.x+({-1,0,1,0})[1+f%4],
 					self.y+({1.1,0.1,1.1,2.1})[1+f%4],
 					self.vx/4,
@@ -799,24 +811,6 @@ local entity_classes={
 		frames_to_death=9,
 		draw=function(self)
 			spr(51+flr(self.frames_alive/3)%2,self.x-2.5,-self.y-5)
-		end
-	},
-	blood={
-		render_layer=4,
-		is_slide_pause_immune=false,
-		collision_channel=1, -- ground
-		on_update=function(self)
-			self.vx*=0.97
-			self.vy-=0.1
-		end,
-		draw=function(self)
-			pset(self.x+0.5,-self.y,ternary(self.y<=0,2,8))
-		end,
-		on_collide=function(self)
-			if self.frames_to_death<=0 then
-				self.vx=0
-				self.frames_to_death=30
-			end
 		end
 	},
 	name_tag={
@@ -928,10 +922,14 @@ local entity_classes={
 	boulder={
 		width=8,
 		height=6,
-		collision_channel=17, -- ground, boulders
 		platform_channel=16, -- boulders
 		hurtbox_channel=10, -- enemy bullets, explosions
-		gravity=0.2,
+		init=function(self)
+			if self.enable_physics then
+				self.collision_channel=17 -- ground, boulders
+				self.gravity=0.2
+			end
+		end,
 		draw=function(self)
 			self:apply_lighting()
 			spr(12,self.x+0.5,-self.y-8)
@@ -943,7 +941,7 @@ local entity_classes={
 			end
 			for i=1,10 do
 				local rx=rnd_int(-4,4)
-				add_smoke(self:center_x()+rx,self:center_y()+rnd_int(-3,3),rx/10,rnd_float(0.3,0.5))
+				add_particle("smoke",self:center_x()+rx,self:center_y()+rnd_int(-3,3),rx/10,rnd_float(0.3,0.5))
 			end
 		end,
 		on_hit=noop,
@@ -974,7 +972,7 @@ local entity_classes={
 		on_death=function(self)
 			local i
 			for i=1,6 do
-				add_smoke(self:center_x()+rnd_int(-2,2),self:center_y()+rnd_int(-3,1),0,0.4)
+				add_particle("smoke",self:center_x()+rnd_int(-2,2),self:center_y()+rnd_int(-3,1),0,0.4)
 			end
 			screen_shake_frames=max(screen_shake_frames,2)
 		end
@@ -1009,12 +1007,16 @@ local entity_classes={
 	crate={
 		width=4,
 		height=4,
-		collision_channel=13, -- ground, crates, barrels
 		platform_channel=4, -- crates
 		hurtbox_channel=43, -- player swing, bullets, explosions, quicksand
-		gravity=0.2,
 		color_ramp=color_ramps.brown,
 		sprite=14,
+		init=function(self)
+			if self.enable_physics then
+				self.collision_channel=13 -- ground, crates, barrels
+				self.gravity=0.2
+			end
+		end,
 		draw=function(self)
 			self:apply_lighting()
 			spr(self.sprite,self.x-1.5,-self.y-8)
@@ -1027,8 +1029,6 @@ local entity_classes={
 		on_death=function(self)
 			create_entity("plank",self.x,self.y)
 			create_entity("plank",self.x,self.y)
-			-- create_entity("plank",nil,nilclone_props(self,{"x","y"}))
-			-- create_entity("plank",nil,nilclone_props(self,{"x","y"}))
 		end
 	},
 	barrel={
@@ -1292,16 +1292,23 @@ function update_game()
 			end
 		end
 	end
-	-- update smoke
+	-- update particles
 	if pause_frames<=0 then
-		foreach(smoke,function(particle)
-			particle.vx-=0.03 -- todo might not be the right amount
+		foreach(particles,function(particle)
 			particle.vx*=0.98
 			particle.x+=particle.vx
 			particle.y+=particle.vy
+			if particle.type=="blood" then
+				particle.vy-=0.1
+				if particle.y<=0 then
+					particle.y,particle.vx,particle.vy,particle.color=0,0,0,2
+				end
+			else
+				particle.vx-=0.03 -- todo might not be the right amount
+			end
 			decrement_counter_prop(particle,"frames_to_death")
 		end)
-		filter_list(smoke,function(particle)
+		filter_list(particles,function(particle)
 			return particle.frames_to_death>0
 		end)
 	end
@@ -1341,9 +1348,9 @@ function draw_game()
 		entity:draw()
 		pal()
 	end)
-	-- draw smoke
-	foreach(smoke,function(particle)
-		pset(particle.x+0.5,-particle.y,4)
+	-- draw particles
+	foreach(particles,function(particle)
+		pset(particle.x+0.5,-particle.y,particle.color)
 	end)
 	-- black out the area outside the pane
 	color(0)
@@ -1359,7 +1366,7 @@ end
 function reset_to_level(lvl)
 	-- reset vars
 	reset_frame_stuff()
-	entities,new_entities,background_entities,smoke,light_sources,sun,player,left_wall,right_wall={},{},{},{},{} -- ,nil...
+	entities,new_entities,background_entities,particles,light_sources,sun,player,left_wall,right_wall={},{},{},{},{} -- ,nil...
 	-- create initial entities
 	player,sun,left_wall,right_wall=create_entity("player"),create_entity("sun"),create_entity("invisible_wall",-3,-4,{height=40}),create_entity("invisible_wall",125,-4,{height=40})
 	-- load the level
@@ -1528,6 +1535,7 @@ function create_entity(class_name,x,y,args,offset,skip_init)
 					if self.y+self.height<=0 then
 						self:despawn()
 					end
+				-- move and check for collisions
 				else
 					self.vy-=self.gravity
 					local vx,vy=self.vx,self.vy
@@ -1572,15 +1580,6 @@ function create_entity(class_name,x,y,args,offset,skip_init)
 									end
 								end
 							end
-							-- disabled this code: might make moving platforms mess up
-							-- if this is a moving obstacle, check to see if it rammed into anything
-							-- if self.platform_channel>0 then
-							-- 	for entity in all(entities) do
-							-- 		for dir in all(directions) do
-							-- 			entity:check_for_collision(self,dir)
-							-- 		end
-							-- 	end
-							-- end
 						end
 					end
 					-- check for collisions against the ground
@@ -1677,13 +1676,15 @@ function clone_props(obj,params)
 	return clone
 end
 
-function add_smoke(x,y,vx,vy)
-	add(smoke,{
+function add_particle(type,x,y,vx,vy)
+	add(particles,{
+		type=type,
 		x=x,
 		y=y,
 		vx=vx,
 		vy=vy,
-		frames_to_death=rnd_int(5,20)
+		color=ternary(type=="smoke",4,8),
+		frames_to_death=ternary(type=="smoke",rnd_int(5,20),100)
 	})
 end
 
