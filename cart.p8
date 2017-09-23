@@ -3,70 +3,15 @@ version 8
 __lua__
 --[[
 
-quickdraw gambit?
+quickdraw gambit
+50 deeds best left undone
 
-todo: intro
-todo: score screen
-todo: worlds?
-todo: despawn most things from one level when entering another (barrels that roll off screen...)
-todo: barrels should break on hit?
-todo: cannonballs break boulders...?
-todo: barrels can be hit multiple times by the same slash
-todo: get that sun displaying again
-todo: global on below ground --> self:die?
-todo: rolling barrels are glitchy
-
-collision interactions (the expensive ones):
-	player		-->	ground
-	player		-->	invisible walls
-	player		-->	crates
-	player		-->	barrels
-	player		-->	boulders
-	outlaw		-->	ground
-	bullet		-->	ground
-	quickshot	-->	ground
-	cannonball	-->	ground
-	dynamite	-->	ground
-	dynamite	-->	crates
-	dynamite	-->	barrels
-	dynamite	-->	boulders
-	blood		-->	ground
-	boulder		-->	ground (enable_physics)
-	boulder		--> boulders (enable_physics)
-	rock		-->	ground
-	rock		-->	crates
-	rock		-->	barrels
-	rock		-->	boulders
-	crate		-->	ground (enable_physics)
-	crate		-->	crates (enable_physics)
-	crate		-->	barrels (enable_physics)
-	barrel		-->	ground
-	barrel		-->	crates
-	barrel		-->	barrels
-	rolling_barrel	-->	ground
-	rolling_barrel	-->	crates
-
-hazards so far:
-	crates
-	barrels
-	explosive barrels
-	bullets
-	quickshots
-	cannonballs
-	dynamite
-	rolling barrels
-	rolling explosive barrels
-	quicksand
-	boulders
-
-hazards to build:
-	lasso?
-	fire?
-	multi hit obstacle?
-	jump pads?
-	boomerangs?
-	sandstorm/wind?
-	bow & arrow?
+power:
+	1: hurts player (bullets)
+	2: rolls barrels over, bounces rolling barrels (barrels, quickshots)
+	3: breaks rolling barrels (slash)
+	4: breaks barrels/crates, damages boulders (cannonballs)
+	5: destroys boulders (explosions)
 
 collision_channels:
 	1: ground
@@ -85,15 +30,23 @@ hitbox_channels:
 	64: falling rocks
 
 render_layers:
+	(sky)
 	1: the sun
+	(background entities)
+	2: plank, barrel ring
+	(ground)
+	(shadows)
 	4: blood, muzzle flash
 	5: ??
 	6: twinkle
 	7: quicksand
+	(particles)
+	(letterboxing)
+	10: name tag
 
-update priority:
- 5: ???
- 6: player
+update_priority:
+	5: ???
+	6: player
 
 axis:
        +y (up)
@@ -115,31 +68,6 @@ sub-pixel divisions:
             |
        x=[0.5,1.5)
 
-person				todo
-player				todo
-outlaw				todo
-level_exit			~looks good~
-invisible_wall		~looks good~
-bullet				todo
-cannonball			todo
-quickshot			todo
-dynamite			todo
-twinkle				~looks good~
-blood				refactor to be like 
-name_tag			todo
-name_tag_slash		todo
-muzzle_flash		todo
-hit_flash			todo
-explosion			todo
-boulder				todo
-rock				todo
-quicksand			todo
-crate				todo
-barrel				todo
-plank				~looks good~
-barrel_ring			~looks good~
-rolling_barrel		todo
-sun					refactor to be non-entity
 ]]
 
 function noop() end
@@ -152,7 +80,7 @@ local skip_frames=0
 -- global entity vars
 local entities
 local new_entities
-local background_entities
+local background_props
 local player
 local sun
 local left_wall
@@ -189,6 +117,14 @@ local color_ramps={
 	grey={1,5,13,6,7},
 	brown={1,2,4,4,15}
 }
+local light_constants={
+	horizontal={0.9,0.2,-0.2,-0.9},
+	vertical={-0.95,0,0.95}
+}
+
+-- memory optimizations
+local reused_collision_obj={}
+local faux_ground_entity={is_ground=true,vx=0,vy=0}
 
 
 -- levels
@@ -199,11 +135,14 @@ local levels={
 			name="outlaw 1",
 			weapon="gun",
 			behavior=function(self)
-				if self.frames_alive%80==10 then
-					self:shoot({is_quickshot=true})
+				if self.frames_alive%80==1 then
+					self:shoot({is_cannonball=false,is_quickshot=true})
 				end
 			end
 		},
+		"barrel",15,{is_explosive=true},
+		"barrel",85,{is_explosive=true}
+		-- "boulder",55,false
 		-- "boulder",20,false,
 		-- "boulder",30,false,
 		-- "boulder",40,false,
@@ -232,7 +171,7 @@ local levels={
 		-- "crate",62,{y=4,enable_physics=true},
 		-- "crate",72,{y=4,enable_physics=true},
 		-- "crate",59,{y=8,enable_physics=true},
-		-- "crate",64,{y=8,enable_physics=true},
+		-- "crate",64,{y=8,enable_physics=true}
 	},
 	{
 		{
@@ -451,6 +390,7 @@ local entity_classes={
 		causes_bleeding=true,
 		hurtbox_channel=126, -- enemy bullets, level exit, explosions, rolling barrels, quicksand, falling rocks
 		collision_channel=31, -- ground, invisible walls, crates, barrels, boulders
+		power=3,
 		update=function(self)
 			decrement_counter_prop(self,"pose_frames")
 			decrement_counter_prop(self,"slash_frames")
@@ -539,7 +479,8 @@ local entity_classes={
 			pal()
 			-- draw the sword slash
 			if self.slash_frames>0 then
-				local slash_sprite=({6,6,5,4,4,3,2,1,0})[self.slash_frames]
+				local slash_frames={6,6,5,4,4,3,2,1,0}
+				local slash_sprite=slash_frames[self.slash_frames]
 				sspr(10*slash_sprite,ternary(self.slash_dir<0,15,6),10,9,self.x-ternary(self.facing<0,4.5,1.5),-self.y-7,10,9,self.facing<0)
 			end
 			-- draw pose schwing
@@ -558,6 +499,7 @@ local entity_classes={
 			return
 				self.slash_frames>=5 and
 				self.slash_frames<=7 and
+				(other.class_name!="barrel" or self.y<other.y+other.height) and
 				rects_overlapping(
 					self.x-ternary(self.facing<0,7,0),self.y-3,10,10,
 					other.x,other.y,other.width,other.height)
@@ -647,8 +589,9 @@ local entity_classes={
 			elseif self.weapon=="barrels" then
 				create_entity("rolling_barrel",self.x+ternary(self.facing<0,-1,0),self.y+2,{
 					vx=self.facing,
+					facing=self.facing,
 					small_bounce_vy=ternary(self.y>5,1.4,0.7),
-					large_bounce_vy=ternary(self.y>5,1.7,1),
+					big_bounce_vy=ternary(self.y>5,1.7,1),
 					is_explosive=options.is_explosive
 				})
 			end
@@ -707,7 +650,7 @@ local entity_classes={
 			right_wall.x+=117
 			local lvl=level_num+1
 			load_level(lvl,117) -- modifies level_num
-			load_background_entities(lvl-1,117+25,2*117+25)
+			load_background_props(lvl-1,117+25,2*117+25)
 			self:die()
 			return false
 		end
@@ -726,6 +669,7 @@ local entity_classes={
 		collision_channel=1, -- ground
 		vel_change_frames=0,
 		causes_bleeding=true,
+		power=1,
 		on_update=function(self)
 			if decrement_counter_prop(self,"vel_change_frames") then
 				self.vy=0
@@ -735,10 +679,20 @@ local entity_classes={
 			self:draw_shape(1,1)
 		end,
 		on_collide=function(self)
-			self:on_hit()
+			local i
+			for i=1,3 do
+				add_particle(
+					"smoke",
+					self.x+i-1,
+					self.y,
+					self.vx/2+rnd_float(-0.3,0.3),
+					rnd_float(0.3,0.5)
+				)
+			end
+			self:die()
 		end,
-		on_hit=function(self)
-			create_entity("hit_flash",self.x,self.y,clone_props(self,{"facing"}))
+		on_hit=function(self,other)
+			create_entity("hit_flash",ternary(self.facing>0,other.x-1,other.x+other.width),self.y,clone_props(self,{"facing"}))
 			self:die()
 		end,
 		on_hurt=function(self)
@@ -747,23 +701,24 @@ local entity_classes={
 			self:die()
 		end
 	},
-	cannonball={
-		extends="bullet",
-		height=1.1,
-		is_destructive=true,
-		hurtbox_channel=0, -- can't be destroyed by player
-		draw=function(self)
-			self:draw_shape(1,2)
-		end
-	},
 	quickshot={
 		extends="bullet",
 		width=3,
+		power=2,
 		draw=function(self)
 			self:draw_shape(1,1)
 			if self.frames_alive>3 then
 				spr2(107+flr(self.frames_alive/2)%3,self.x+ternary(self.facing<0,3.5,-8),-self.y-5,self.facing>=0)
 			end
+		end
+	},
+	cannonball={
+		extends="bullet",
+		height=1.1,
+		power=4,
+		hurtbox_channel=0, -- can't be destroyed by player
+		draw=function(self)
+			self:draw_shape(1,2)
 		end
 	},
 	dynamite={
@@ -815,6 +770,7 @@ local entity_classes={
 	},
 	name_tag={
 		-- x,text
+		render_layer=10,
 		y=-5,
 		top_hidden=false,
 		bottom_hidden=false,
@@ -852,6 +808,7 @@ local entity_classes={
 	},
 	name_tag_slash={
 		-- x
+		render_layer=10,
 		y=-7,
 		frames_to_death=17,
 		is_pause_immune=true,
@@ -887,7 +844,7 @@ local entity_classes={
 		light_max_range=25,
 		is_light_source=true,
 		draw=function(self)
-			spr2(43-ceil(self.frames_to_death/2),self.x+ternary(self.facing>0,-4.5,-0.5),-self.y-5,self.facing>0)
+			spr2(43-ceil(self.frames_to_death/2),self.x+ternary(self.facing>0,-5.5,-0.5),-self.y-5,self.facing>0)
 		end
 	},
 	explosion={
@@ -899,7 +856,7 @@ local entity_classes={
 		light_intensity=4,
 		light_min_range=6,
 		light_max_range=70,
-		is_destructive=true,
+		power=5,
 		init=function(self)
 			if self.y>0 then
 				self.y-=5
@@ -946,7 +903,7 @@ local entity_classes={
 		end,
 		on_hit=noop,
 		on_hurt=function(self,other)
-			if other.is_destructive then
+			if other.power>=5 then
 				self:die()
 			end
 		end
@@ -1010,7 +967,6 @@ local entity_classes={
 		platform_channel=4, -- crates
 		hurtbox_channel=43, -- player swing, bullets, explosions, quicksand
 		color_ramp=color_ramps.brown,
-		sprite=14,
 		init=function(self)
 			if self.enable_physics then
 				self.collision_channel=13 -- ground, crates, barrels
@@ -1019,10 +975,10 @@ local entity_classes={
 		end,
 		draw=function(self)
 			self:apply_lighting()
-			spr(self.sprite,self.x-1.5,-self.y-8)
+			spr(14,self.x-1.5,-self.y-8)
 		end,
 		on_hurt=function(self,other)
-			if other.is_destructive or other.class_name=="player" then
+			if other.power>=4 or other.class_name=="player" then
 				self:die()
 			end
 		end,
@@ -1032,53 +988,106 @@ local entity_classes={
 		end
 	},
 	barrel={
-		extends="crate",
+		width=4,
 		height=6,
-		sprite=15,
+		gravity=0.2,
 		platform_channel=8, -- barrels
+		collision_channel=29, -- ground, crates, barrels, boulders
 		hurtbox_channel=59, -- player swing, bullets, rolling barrels, explosions, quicksand
 		is_explosive=false,
+		sprite=15,
 		init=function(self)
-			if self.is_explosive then
-				self.color_ramp=color_ramps.red
-			end
+			self.color_ramp=ternary(self.is_explosive,color_ramps.red,color_ramps.brown)
+		end,
+		draw=function(self)
+			self:apply_lighting()
+			spr(self.sprite,self.x-1.5,-self.y-8)
 		end,
 		on_hurt=function(self,other)
-			if other.is_destructive then
-				if self.is_explosive then
-					create_entity("explosion",self.x-4,self.y)
-				end
+			-- power level 4+ causes the barrel to break/explode
+			if other.power>=4 then
 				self:die()
-			elseif other.class_name=="player" and other.y<self.y+self.height then
+			-- power level 2+ causes the barrel to roll
+			elseif other.power>=2 then
 				self:despawn()
 				create_entity("rolling_barrel",self.x,self.y+1,{
 					vx=other.facing,
-					is_explosive=self.is_explosive
-				})
-			elseif other.class_name=="rolling_barrel" then
-				self:despawn()
-				create_entity("rolling_barrel",self.x,self.y+1,{
-					vx=other.vx,
+					facing=other.facing,
 					is_explosive=self.is_explosive
 				})
 			end
 		end,
 		on_death=function(self)
-			self:super_on_death()
+			create_entity("plank",self.x,self.y)
+			create_entity("plank",self.x,self.y)
 			create_entity("barrel_ring",self.x,self.y)
+			if self.is_explosive then
+				create_entity("explosion",self.x-4,self.y)
+			end
+		end
+	},
+	rolling_barrel={
+		extends="barrel",
+		height=4,
+		vy=1,
+		platform_channel=0,
+		collision_channel=21, -- ground, crates, boulders
+		invincibility_frames=4,
+		hitbox_channel=16, -- rolling barrels
+		big_bounce_vy=1,
+		small_bounce_vy=0.7,
+		gravity=0.1,
+		power=2,
+		sprite=13,
+		on_hit=function(self,other)
+			other:on_hurt(self)
+			self:bounce_off(other)
+			return false
+		end,
+		on_hurt=function(self,other)
+			-- power level 3+ causes the barrel to break/explode
+			if other.power>=3 then
+				self:die()
+			-- power level 2+ causes the barrel to bounce
+			elseif other.power>=2 then
+				self:bounce_off(other)
+			end
+		end,
+		on_stuck=function(self)
+			self:despawn()
+			create_entity("barrel",self.x,self.y-1)
+		end,
+		on_collide=function(self,dir)
+			if dir=="bottom" then
+				self.vy=self.small_bounce_vy
+			elseif dir=="left" then
+				self.vy=self.big_bounce_vy
+				self.facing=1
+			elseif dir=="right" then
+				self.vy=self.big_bounce_vy
+				self.facing=-1
+			end
+			self.vx=self.facing
+		end,
+		bounce_off=function(self,other)
+			self.vy=self.big_bounce_vy
+			if other.facing then
+				self.facing=to_sign(self:center_x()-self.vx>other:center_x()-other.vx)
+			else
+				self.facing*=-1
+			end
+			self.vx=self.facing
+			self.invincibility_frames=4
 		end
 	},
 	plank={
+		render_layer=2,
 		width=3,
 		height=3,
 		gravity=0.1,
+		frames_to_death=45,
 		init=function(self)
 			self.vx,self.vy,self.rot_speed=rnd_float(-0.4,0.4),rnd_float(0.9,1.6),rnd_int(1,2)
-		end,
-		on_update=function(self)
-			if self.y+self.height<0 then
-				self:die()
-			end
 		end,
 		draw=function(self)
 			local f=flr(self.frames_alive/self.rot_speed)%4
@@ -1098,75 +1107,6 @@ local entity_classes={
 			spr(125,self.x-1.5,-self.y-6)
 		end
 	},
-	rolling_barrel={
-		height=4,
-		width=4,
-		vy=1,
-		collision_channel=5, -- ground, crates
-		color_ramp=color_ramps.brown,
-		invincibility_frames=5,
-		hitbox_channel=16, -- rolling barrels
-		hurtbox_channel=59, -- player swing, bullets, rolling barrels, explosions, quicksand
-		large_bounce_vy=1,
-		small_bounce_vy=0.7,
-		gravity=0.1,
-		is_explosive=false,
-		init=function(self)
-			if self.is_explosive then
-				self.color_ramp=color_ramps.red
-			end
-		end,
-		on_hit=function(self,other)
-			other:on_hurt(self)
-			self:bounce_off(other)
-			return false
-		end,
-		on_stuck=function(self)
-			self:despawn()
-			create_entity("barrel",self.x,self.y-1)
-		end,
-		on_hurt=function(self,other)
-			if other.is_destructive then
-				if self.is_explosive then
-					create_entity("explosion",self.x-4,self.y+2)
-				end
-				self:die()
-			-- bug: player still gets a slash reset
-			elseif other.class_name!="player" or other.y<self.y+self.height then
-				self:bounce_off(other)
-			end
-		end,
-		on_collide=function(self,dir)
-			if dir=="bottom" then
-				self.vy=self.small_bounce_vy
-			elseif dir=="left" or dir=="right" then
-				self.vy=self.large_bounce_vy
-				self.vx*=-1
-			end
-		end,
-		bounce_off=function(self,other)
-			self.vy=self.large_bounce_vy
-			if other.x<self.x then
-				self.vx=1
-			elseif other.x>self.x then
-				self.vx=-1
-			end
-			self.invincibility_frames=max(self.invincibility_frames,2)
-		end,
-		draw=function(self)
-			self:apply_lighting()
-			spr(13,self.x-1.5,-self.y-8)
-		end,
-		on_death=function(self)
-			-- local props=clone_props(self,{"x","y"})
-			-- create_entity("plank",props)
-			-- create_entity("plank",props)
-			-- create_entity("barrel_ring",props)
-			create_entity("plank",self.x,self.y)
-			create_entity("plank",self.x,self.y)
-			create_entity("barrel_ring",self.x,self.y)
-		end
-	},
 	sun={
 		slide_rate=0,
 		light_intensity=3,
@@ -1177,17 +1117,12 @@ local entity_classes={
 		phase=1,
 		is_light_source=true,
 		draw=function(self)
-			-- color(({10,9,8})[self.phase])
-			-- local widths={17,17,17,16,16,15,15,14,13,12,11,9,7,4}
-			-- local i
-			-- for i=flr(4-self.y),14 do
-			-- 	line(self.x-widths[i],-self.y-i+3,self.x+widths[i],-self.y-i+3)
-			-- end
+			circfill(self.x,-self.y+9,20,10)
 		end,
 		draw_shadow=noop
 	}
 }
-local background_entity_classes={
+local background_prop_classes={
 	-- sprite_x,sprite_y,sprite_width,sprite_height,parallax_layer,y
 	cactus={0,32,8,12,6},
 	distant_ranch={8,32,11,5,3},
@@ -1233,10 +1168,10 @@ function _draw()
 	scenes[scene][3]()
 	-- draw debug info
 	camera()
-	print("mem:         "..flr(100*(stat(0)/1024)).."%",2,100,ternary(stat(1)>=1024,2,1))
-	print("cpu:         "..flr(100*stat(1)).."%",2,107,ternary(stat(1)>=1,2,1))
-	print("entities:    "..#entities,2,114,ternary(#entities>50,2,1))
-	print("bg entities: "..#background_entities,2,121,1)
+	print("mem:      "..flr(100*(stat(0)/1024)).."%",2,100,ternary(stat(1)>=1024,2,1))
+	print("cpu:      "..flr(100*stat(1)).."%",2,107,ternary(stat(1)>=1,2,1))
+	print("entities: "..#entities,2,114,ternary(#entities>50,2,1))
+	print("bg props: "..#background_props,2,121,ternary(#background_props>50,2,1))
 end
 
 
@@ -1246,6 +1181,7 @@ function init_game()
 end
 
 function update_game()
+	local i,j,entity,entity2,particle
 	-- reset the level when x is pressed
 	if button_presses[5] then
 		reset_to_level(level_num)
@@ -1258,15 +1194,19 @@ function update_game()
 	local entity,entity2
 	slide_frames=decrement_counter(slide_frames)
 	if slide_frames>0 then
-		foreach(entities,function(entity)
-			entity:slide()
-		end)
-		foreach(background_entities,function(bg)
-			bg.x-=bg.slide_rate
-		end)
+		for i=1,#entities do
+			entities[i]:slide()
+		end
+		for i=1,#background_props do
+			background_props[i].x-=background_props[i].slide_rate
+		end
+		for i=1,#particles do
+			particles[i].x-=3
+		end
 	end
 	-- update entities
-	foreach(entities,function(entity)
+	for i=1,#entities do
+		entity=entities[i]
 		if (pause_frames<=0 or entity.is_pause_immune) and (slide_frames<=0 or entity.is_slide_pause_immune) then
 			-- call the entity's update function
 			entity:update()
@@ -1283,18 +1223,21 @@ function update_game()
 				entity:despawn()
 			end
 		end
-	end)
+	end
 	-- check for hits
-	for entity in all(entities) do
-		for entity2 in all(entities) do
-			if (pause_frames<=0 or (entity.is_pause_immune and entity2.is_pause_immune)) and (slide_frames<=0 or (entity.is_slide_pause_immune and entity2.is_slide_pause_immune)) and entity!=entity2 and band(entity.hitbox_channel,entity2.hurtbox_channel)>0 and entity2.invincibility_frames<=0 and entity:check_for_hits(entity2) and entity:on_hit(entity2)!=false then
+	for i=1,#entities do
+		entity=entities[i]
+		for j=1,#entities do
+			entity2=entities[j]
+			if (pause_frames<=0 or (entity.is_pause_immune and entity2.is_pause_immune)) and (slide_frames<=0 or (entity.is_slide_pause_immune and entity2.is_slide_pause_immune)) and i!=j and band(entity.hitbox_channel,entity2.hurtbox_channel)>0 and entity2.invincibility_frames<=0 and entity:check_for_hits(entity2) and entity:on_hit(entity2)!=false then
 				entity2:on_hurt(entity)
 			end
 		end
 	end
 	-- update particles
 	if pause_frames<=0 then
-		foreach(particles,function(particle)
+		for i=1,#particles do
+			particle=particles[i]
 			particle.vx*=0.98
 			particle.x+=particle.vx
 			particle.y+=particle.vy
@@ -1307,7 +1250,7 @@ function update_game()
 				particle.vx-=0.03 -- todo might not be the right amount
 			end
 			decrement_counter_prop(particle,"frames_to_death")
-		end)
+		end
 		filter_list(particles,function(particle)
 			return particle.frames_to_death>0
 		end)
@@ -1324,39 +1267,54 @@ function update_game()
 end
 
 function draw_game()
-	local camera_x=-1
+	local camera_x,i=-1
 	if screen_shake_frames>0 then
-		magnitude=mid(1,screen_shake_frames/2,3)
-		camera_x+=magnitude*(2*(scene_frame%2)-1)
+		camera_x+=mid(1,screen_shake_frames/2,3)*(2*(scene_frame%2)-1)
 	end
 	camera(camera_x,-70)
 	-- draw the sky
 	rectfill(0,-20,125,-1,9)
+	-- draw entities with render layer 1 (e.g. the sun)
+	draw_entities(1,1)
+	-- draw background elements
+	local i
+	for i=1,#background_props do
+		background_props[i]:draw()
+	end
+	-- draw entities with render layer 2
+	draw_entities(2,2)
 	-- draw the ground
 	rectfill(0,0,125,3,4)
-	-- draw background elements
-	foreach(background_entities,function(bg)
-		bg:draw()
-	end)
 	-- draw each entity's shadow
-	foreach(entities,function(entity)
-		entity:draw_shadow()
+	for i=1,#entities do
+		entities[i]:draw_shadow()
 		pal()
-	end)
-	-- draw each entity
-	foreach(entities,function(entity)
-		entity:draw()
-		pal()
-	end)
+	end
+	-- draw entities with render layer 3 to 9
+	draw_entities(3,9)
 	-- draw particles
-	foreach(particles,function(particle)
-		pset(particle.x+0.5,-particle.y,particle.color)
-	end)
+	for i=1,#particles do
+		pset(particles[i].x+0.5,-particles[i].y,particles[i].color)
+		pal()
+	end
 	-- black out the area outside the pane
 	color(0)
-	-- rectfill(-1,4,126,57) -- bottom
+	rectfill(-1,4,126,57) -- bottom
 	rectfill(-1,-70,126,-21) -- top
 	rect(-1,-21,126,4) -- edges
+	-- draw entities with render layer 10 (e.g. name tags)
+	draw_entities(10,10)
+end
+
+function draw_entities(min_render_layer,max_render_layer)
+	local i,entity
+	for i=1,#entities do
+		entity=entities[i]
+		if min_render_layer<=entity.render_layer and entity.render_layer<=max_render_layer then
+			entity:draw()
+			pal()
+		end
+	end
 end
 
 function reset_frame_stuff()
@@ -1366,14 +1324,14 @@ end
 function reset_to_level(lvl)
 	-- reset vars
 	reset_frame_stuff()
-	entities,new_entities,background_entities,particles,light_sources,sun,player,left_wall,right_wall={},{},{},{},{} -- ,nil...
+	entities,new_entities,background_props,particles,light_sources,sun,player,left_wall,right_wall={},{},{},{},{} -- ,nil...
 	-- create initial entities
 	player,sun,left_wall,right_wall=create_entity("player"),create_entity("sun"),create_entity("invisible_wall",-3,-4,{height=40}),create_entity("invisible_wall",125,-4,{height=40})
 	-- load the level
 	load_level(lvl,0)
-	load_background_entities(lvl,-25,117+25) -- todo but all of them
+	load_background_props(lvl,-25,117+25)
 	add_new_entities()
-	player:pose()
+	-- player:pose() -- todo uncomment
 end
 
 function load_level(lvl,offset)
@@ -1385,14 +1343,14 @@ function load_level(lvl,offset)
 	end
 end
 
-function load_background_entities(lvl,min_x,max_x)
+function load_background_props(lvl,min_x,max_x)
 	local i
 	for i=1,#level_backgrounds,3 do
-		local class_def=background_entity_classes[level_backgrounds[i+1]]
+		local class_def=background_prop_classes[level_backgrounds[i+1]]
 		local slide_rate=class_def[5]/8
 		local curr_x=117*(level_backgrounds[i]%1)+117*slide_rate*(flr(level_backgrounds[i])-lvl)
 		if min_x<=curr_x and curr_x<max_x then
-			add(background_entities,{
+			add(background_props,{
 				x=curr_x+5,
 				y=class_def[6] or 0,
 				slide_rate=3*slide_rate,
@@ -1406,11 +1364,11 @@ function load_background_entities(lvl,min_x,max_x)
 		end
 	end
 	-- filter out background entities that are off screen
-	filter_list(background_entities,function(bg)
+	filter_list(background_props,function(bg)
 		return bg.x>-30
 	end)
 	-- sort background entities for rendering
-	sort_list(background_entities,function(a,b)
+	sort_list(background_props,function(a,b)
 		return a.class_def[5]>b.class_def[5]
 	end)
 end
@@ -1485,16 +1443,17 @@ function create_entity(class_name,x,y,args,offset,skip_init)
 				end
 				-- every other color is lit based on the angle and distance to light sources
 				for c=4,15 do
-					local surface_x,surface_y,color_index,ramp=({0.9,0.2,-0.2,-0.9})[1+c%4]*to_sign(flip_x),({-0.95,0,0.95})[flr(c/4)]*to_sign(flip_y),1,self.color_ramp
+					local surface_x,surface_y,color_index,ramp,i,light_source=light_constants.horizontal[1+c%4]*to_sign(flip_x),light_constants.vertical[flr(c/4)]*to_sign(flip_y),1,self.color_ramp
 					if surface_y==0 then
 						surface_x=to_sign(surface_x>0)
 					elseif c%4==0 or c%4==3 then
 						surface_y*=0.5
 					end
-					foreach(light_sources,function(light_source)
-						local dx=mid(-100,light_source:center_x()-self:center_x(),100)
-						local dy=mid(-100,light_source:center_y()-self:center_y(),100)
-						local dist=sqrt(dx*dx+dy*dy) -- between 0 and ~142
+					for i=1,#light_sources do
+						light_source=light_sources[i]
+						local dx,dy=mid(-100,light_source:center_x()-self:center_x(),100),mid(-100,light_source:center_y()-self:center_y(),100)
+						-- close objects will get too little light if dist is changed from 0 to 1
+						local dist=max(1,sqrt(dx*dx+dy*dy)) -- between 1 and ~142
 						local dx_norm,dy_norm=dx/dist,dy/dist
 						-- todo optimize below
 						local max_color_index=light_source.light_intensity+0.7
@@ -1510,7 +1469,7 @@ function create_entity(class_name,x,y,args,offset,skip_init)
 							color_index=new_color_index
 							ramp=ternary(light_source.light_ramp,light_source.light_ramp,self.color_ramp)
 						end
-					end)
+					end
 					pal(c,ramp[color_index])
 				end
 			end,
@@ -1545,7 +1504,7 @@ function create_entity(class_name,x,y,args,offset,skip_init)
 						self.y+=vy
 					-- otherwise we have a lot of work to do
 					elseif vx!=0 or vy!=0 then
-						local move_steps,t,entity,d,dir,axis,size,mult,vel,i,self_sub=ceil(max(abs(vx),abs(vy))/1.05) -- ,nil...
+						local move_steps,self_sub,t,entity,d,dir,axis,size,mult,vel,i=ceil(max(abs(vx),abs(vy))/1.05),reused_collision_obj -- ,nil...
 						for t=1,move_steps do
 							if vx==self.vx then
 								self.x+=vx/move_steps
@@ -1562,17 +1521,15 @@ function create_entity(class_name,x,y,args,offset,skip_init)
 										entity=entities[i]
 										if band(self.collision_channel,entity.platform_channel)>0 and self!=entity and mult*self[vel]>=mult*entity[vel] then
 											-- they can collide, now check to see if there is overlap
-											self_sub={
-												x=self.x+1.1,
-												y=self.y+1.1,
-												width=self.width-2.2,
-												height=self.height-2.2
-											}
+											self_sub.x=self.x+1.1
+											self_sub.y=self.y+1.1
+											self_sub.width=self.width-2.2
+											self_sub.height=self.height-2.2
 											self_sub[axis],self_sub[size]=self[axis]+ternary(mult>0,self[size]/2,0),self[size]/2
-										 	if rects_overlapping(
-										 		self_sub.x,self_sub.y,self_sub.width,self_sub.height,
-										 		entity.x,entity.y,entity.width,entity.height) then
-											 	-- there was a collision
+											if rects_overlapping(
+												self_sub.x,self_sub.y,self_sub.width,self_sub.height,
+												entity.x,entity.y,entity.width,entity.height) then
+												-- there was a collision
 												self[axis],self[vel]=entity[axis]+ternary(mult<0,entity[size],-self[size]),entity[vel]
 												self:on_collide(dir[1],entity)
 											end
@@ -1585,7 +1542,7 @@ function create_entity(class_name,x,y,args,offset,skip_init)
 					-- check for collisions against the ground
 					if self.y<0 and self.vy<0 and band(self.collision_channel,1)>0 then
 						self.y,self.vy=0,0
-						self:on_collide("bottom",{vx=0,vy=0})
+						self:on_collide("bottom",faux_ground_entity)
 					end
 				end
 			end,
