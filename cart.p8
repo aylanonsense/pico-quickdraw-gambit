@@ -48,6 +48,17 @@ update_priority:
 	5: ???
 	6: player
 
+level design:
+	1: teach the player to slash the enemy and dodge bullets
+	2: the player will discover they can slash bullets (and we will teach this)
+	3: this discovery feels like it could make the game trivial
+	4: we make it harder to slash bullets with quickshots
+	5: finally we introduce cannonballs, which can't be slashed
+	6: then we stress the player out / have fun with puzzles you have to dodge through
+	7: at some point we introduce all the other fun goodies
+	8: each mechanic picks up pace really quickly
+	9: we riff off of puzzles and combine multiple mechanics at once
+
 axis:
        +y (up)
         |
@@ -126,187 +137,179 @@ local light_constants={
 local reused_collision_obj={}
 local faux_ground_entity={is_ground=true,vx=0,vy=0}
 
-
 -- levels
 local levels={
-	-- class_name,args,...
 	{
 		{
-			name="outlaw 1",
-			weapon="gun",
+			name="slow shot",
 			behavior=function(self)
-				if self.frames_alive%80==1 then
-					self:shoot({is_cannonball=false,is_quickshot=true})
+				if self.frames_alive%120==30 then
+					self:shoot()
 				end
 			end
 		},
-		"barrel",15,{is_explosive=true},
-		"barrel",85,{is_explosive=true}
-		-- "boulder",55,false
-		-- "boulder",20,false,
-		-- "boulder",30,false,
-		-- "boulder",40,false,
-		-- "boulder",50,false,
-		-- "boulder",60,false,
-		-- "boulder",70,false,
-		-- "boulder",80,false,
-		-- "boulder",90,false,
-		-- "boulder",100,false,
-		-- "boulder",35,{y=10,enable_physics=true},
-		-- "boulder",45,{y=10,enable_physics=true},
-		-- "boulder",55,{y=10,enable_physics=true},
-		-- "crate",30,false,
-		-- "crate",35,false,
-		-- "crate",40,false,
-		-- "crate",45,false,
-		-- "crate",50,false,
-		-- "crate",55,false,
-		-- "crate",60,false,
-		-- "crate",70,false,
-		-- "crate",75,false,
-		-- "crate",80,false,
-		-- "crate",42,{y=4,enable_physics=true},
-		-- "crate",47,{y=4,enable_physics=true},
-		-- "crate",52,{y=4,enable_physics=true},
-		-- "crate",62,{y=4,enable_physics=true},
-		-- "crate",72,{y=4,enable_physics=true},
-		-- "crate",59,{y=8,enable_physics=true},
-		-- "crate",64,{y=8,enable_physics=true}
+		"crate",28,false,
+		"crate",40,false,
+		"crate",45,false,
+		"crate",42,{y=4,enable_physics=true},
 	},
 	{
 		{
-			name="outlaw x",
+			name="jump shots",
 			behavior=function(self)
-				if self.frames_alive%40==10 then
-					self:shoot({is_cannonball=true})
-					self:shoot({is_cannonball=true,angle=2,skip_effects=true})
+				if self.frames_alive%25==15 then
+					self:shoot()
 				end
-				-- if f==10 or f==14 or f==18 or f==28 or f==34 or f==38 then
-				-- 	self:shoot()
-				-- end
-				-- if f==19 then
-				-- 	self:jump(0,4)
-				-- end
-			end
-		}
-	},
-	{
-		{
-			name="outlaw x2",
-			behavior=function(self)
-				local f=self.frames_alive%80
-				if f==10 then
-					self:shoot({is_cannonball=true})
-					self:shoot({is_cannonball=true,angle=2,skip_effects=true})
-				end
-				if f==15 then
+				if self.frames_alive%50==32 then
 					self:jump(0,4)
 				end
-				if f==23 then
+			end
+		}
+	},
+	-- need some more bullet stuff here
+	{
+		{
+			name="shotgun",
+			behavior=function(self)
+				if self.frames_alive%50==15 then
+					self:shoot({angle=6,vel_change_frames=14})
+					self:shoot({angle=3,vel_change_frames=14})
+					self:shoot({angle=0,vel_change_frames=10})
+					self:shoot({angle=-3,vel_change_frames=15})
+					self:shoot({angle=-6,vel_change_frames=15})
+				end
+				if self.frames_alive%50==8 then
+					self:jump(0,2)
+				end
+			end
+		}
+	},
+	-- need a level that you can gimp by slashing through bullets
+	{
+		{
+			name="quickshot intro",
+			behavior=function(self)
+				if self.frames_alive%120==60 or self.frames_alive%120==72 then
+					self:shoot({is_quickshot=true})
+				end
+				if self.frames_alive%120==66 then
+					self:shoot({is_quickshot=true,angle=4})
+				end
+			end
+		}
+	},
+	-- ... need more challenging quickshot stuff here
+	-- ... need some cannonball introductions here
+	{
+		{
+			name="walls",
+			behavior=function(self)
+				if self.frames_alive%33==10 then
+					self:shoot({is_cannonball=true,angle=3,vel_change_frames=14})
+					self:shoot({is_cannonball=true,angle=0,vel_change_frames=10})
+					self:shoot({is_cannonball=true,angle=-3,vel_change_frames=15})
+				end
+				if self.frames_alive%66==25 then
+					self:jump(0,4)
+				end
+				if self.frames_alive%66==8 then
+					self:jump(0,2)
+				end
+			end
+		}
+	},
+	{
+		{
+			name="openings",
+			behavior=function(self)
+				if self.frames_alive%50==15 then
+					local f=self.frames_alive%150
+					self:shoot({is_cannonball=(f!=65),angle=4,vel_change_frames=14})
+					self:shoot({is_cannonball=(f!=115),angle=0,vel_change_frames=14})
+					self:shoot({is_cannonball=(f!=15),angle=-4,vel_change_frames=17})
+				end
+				if self.frames_alive%50==10 then
+					self:jump(0,2)
+				end
+			end
+		}
+	},
+	{
+		{
+			name="threading the needle",
+			behavior=function(self)
+				if self.frames_alive%32==5 then
+					self:jump(0,3)
+				end
+				if self.frames_alive%64==9 then
+					self:shoot({is_cannonball=true,angle=6,vel_change_frames=14})
+					self:shoot({is_cannonball=true,angle=-6,vel_change_frames=14})
+				end
+				if self.frames_alive%64==32+10 then
+					self:shoot({is_quickshot=true,angle=3,vel_change_frames=14})
+					self:shoot({is_quickshot=true,angle=0})
+					self:shoot({is_quickshot=true,angle=-3,vel_change_frames=15})
+				end
+			end
+		}
+	},
+	{
+		{
+			name="angled cannons",
+			behavior=function(self)
+				if self.frames_alive%60==15 then
 					self:shoot({is_cannonball=true})
-					self:shoot({is_cannonball=true,angle=-2,skip_effects=true})
-				end
-				-- if f==10 or f==14 or f==18 or f==28 or f==34 or f==38 then
-				-- 	self:shoot()
-				-- end
-				-- if f==19 then
-				-- 	self:jump(0,4)
-				-- end
-			end
-		}
-	},
-	{
-		{
-			name="outlaw 2",
-			behavior=function(self)
-				if self.frames_alive%25==8 then
-					self:shoot()
-				end
-				if self.frames_alive%50==1 then
-					self:jump(0,3)
+					self:shoot({is_cannonball=true,angle=2})
 				end
 			end
 		}
 	},
 	{
 		{
-			name="outlaw 3",
+			name="trickier angled cannons",
 			behavior=function(self)
-				if self.frames_alive%5==4 and self.frames_alive%50<=14 then
-					self:shoot()
+				if self.frames_alive%80==10 then
+					self:shoot({is_cannonball=true})
+					self:shoot({is_cannonball=true,angle=2})
 				end
-				if self.frames_alive%50==35 then
-					self:shoot()
+				if self.frames_alive%80==15 then
+					self:jump(0,4)
 				end
-				if self.frames_alive%100==26 then
-					self:jump(0,3)
-				end
-				if self.frames_alive%100==80 then
-					self:jump(0,1)
+				if self.frames_alive%80==25 then
+					self:shoot({is_cannonball=true})
+					self:shoot({is_cannonball=true,angle=-2})
 				end
 			end
-		},
+		}
 	},
 	{
 		{
-			name="outlaw 4",
+			name="cannonball carpet",
 			behavior=function(self)
-				if self.frames_alive%55==15 then
-					self:jump(0,3)
-				end
-				if self.frames_alive%55==19 then
-					local i
-					for i=-4,4,2 do
-						self:shoot({
-							angle=i,
-							skip_effects=(i!=0),
-							vel_change_frames=22
-						})
-					end
-				end
-			end
-		},
-		"distant_ranch",{x=10,flipped=false}
-	},
-	{
-		{
-			name="outlaw 5",
-			weapon="barrels",
-			behavior=function(self)
-				if self.frames_alive%80==1 then
-					self:jump(0,3)
-				end
-				if self.frames_alive%40==5 then
-					self.weapon="barrels"
-					self:shoot()
+				if self.frames_alive%17==5 then
+					self:shoot({is_cannonball=true})
 				end
 			end
 		}
 	}
-	-- 	-- "barrel",{x=40},
-	-- 	-- "barrel",{x=50},
-	-- 	-- "barrel",{x=60,y=10},
-	-- 	-- "barrel",{x=60,y=20},
-	-- 	-- "barrel",{x=60},
-	-- 	-- "barrel",{x=70},
-	-- 	-- "barrel",{x=80},
-	-- 	"barrel",{x=20},
-	-- 	"crate",{x=110}
-	-- 	-- "rolling_barrel",{x=100,vx=-1},
-	-- 	-- "rolling_barrel",{x=35,y=3,vx=1}
-	-- }
+	-- quicksand
+	-- boulders
+	-- dynamite
+	-- explosive barrels
+	-- barrels
 }
 local level_backgrounds={
 	-- spawn_pos,background_class,flipped
-	1.0,"cactus",false,
-	1.5,"cactus",false,
-	1.9999,"cactus",false,
-	2.0,"cactus",false,
-	2.5,"distant_ranch",false,
-	2.9999,"cactus",false,
-	3.0,"cactus",false,
-	3.5,"cloud",false,
-	3.9999,"cactus",false,
+	-- 1.1+0.01,"big_ridge",false,
+	-- 1.2+0.01,"tiny_ridge",false,
+	-- 1.8,"small_ridge",false
+	-- 1.9999,"cactus",false,
+	-- 2.0,"cactus",false,
+	-- 2.5,"distant_ranch",false,
+	-- 2.9999,"cactus",false,
+	-- 3.0,"cactus",false,
+	-- 3.5,"cloud",false,
+	-- 3.9999,"cactus",false,
 	-- 2,"cactus",false,
 	-- 2.1,"cactus",false,
 	-- 2.5,"cactus",false,
@@ -585,7 +588,9 @@ local entity_classes={
 			-- 		angle=80
 			-- 	})
 			elseif self.weapon=="dynamite" then
-				create_entity("dynamite",self.x+ternary(self.facing<0,-1,2),ceil(self.y+1.5))
+				create_entity("dynamite",self.x+ternary(self.facing<0,-1,2),ceil(self.y+1.5),{
+					vx=options.vx
+				})
 			elseif self.weapon=="barrels" then
 				create_entity("rolling_barrel",self.x+ternary(self.facing<0,-1,0),self.y+2,{
 					vx=self.facing,
@@ -725,7 +730,7 @@ local entity_classes={
 		width=3,
 		height=3,
 		vx=-1.75,
-		vy=1.6,
+		vy=1.5,
 		collision_channel=29, -- ground, crates, barrels, boulders
 		hurtbox_channel=1, -- player swing
 		is_light_source=true,
@@ -1167,11 +1172,11 @@ function _draw()
 	-- call the draw function of the current scene
 	scenes[scene][3]()
 	-- draw debug info
-	camera()
-	print("mem:      "..flr(100*(stat(0)/1024)).."%",2,100,ternary(stat(1)>=1024,2,1))
-	print("cpu:      "..flr(100*stat(1)).."%",2,107,ternary(stat(1)>=1,2,1))
-	print("entities: "..#entities,2,114,ternary(#entities>50,2,1))
-	print("bg props: "..#background_props,2,121,ternary(#background_props>50,2,1))
+	-- camera()
+	-- print("mem:      "..flr(100*(stat(0)/1024)).."%",2,100,ternary(stat(1)>=1024,2,1))
+	-- print("cpu:      "..flr(100*stat(1)).."%",2,107,ternary(stat(1)>=1,2,1))
+	-- print("entities: "..#entities,2,114,ternary(#entities>50,2,1))
+	-- print("bg props: "..#background_props,2,121,ternary(#background_props>50,2,1))
 end
 
 
@@ -1331,7 +1336,7 @@ function reset_to_level(lvl)
 	load_level(lvl,0)
 	load_background_props(lvl,-25,117+25)
 	add_new_entities()
-	-- player:pose() -- todo uncomment
+	player:pose() -- todo uncomment
 end
 
 function load_level(lvl,offset)
@@ -1790,9 +1795,9 @@ __gfx__
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000440000000000000000000
-00011100000a0000000001000000100000010000000000000000020000002a000002000000000000004000000004000000004000004004000000000000000000
-000100000002110000a0100000001000000010000001120000001a0000001000000010000044400000040000000400000004000000400400444ff440004ff440
-000000000000000000020000000a20000000a20000000a0000010000000010000000010000000000000040000004000000400000000440004444444000f44440
+00011100000a00000000080000008000000800000000000000000e000000ea00000e000000000000004000000004000000004000004004000000000000000000
+00010000000e880000a08000000080000000800000088e0000008a0000008000000080000044400000040000000400000004000000400400444ff440004ff440
+0000000000000000000e0000000ae0000000ae0000000a0000080000000080000000080000000000000040000004000000400000000440004444444000f44440
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004444444000444440
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004444444000444440
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000044000000000000000000
